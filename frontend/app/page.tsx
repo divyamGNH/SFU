@@ -37,8 +37,6 @@ export default function Home() {
 
         console.log("[Frontend] RTCPeerConnection created");
 
-        // ---------------- PEER EVENTS ----------------
-
         // Send ICE candidates to backend
         pc.onicecandidate = (event) => {
           if (!event.candidate) {
@@ -91,8 +89,6 @@ export default function Home() {
 
           console.log(event.streams);
         };
-
-        // ---------------- WS EVENTS ----------------
 
         ws.onopen = async () => {
           console.log("[Frontend] Websocket connected");
