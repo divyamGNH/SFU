@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"backend/models"
-	"encoding/json"
 	"log"
 	"net/http"
 	"sync"
@@ -11,8 +10,9 @@ import (
 )
 
 type RoomHandler struct {
-	RoomIdToRoom map[string]*Room
-	mu           sync.RWMutex
+	RoomIdToRoom   map[string]*Room
+	UserIdToRoomId map[string]string
+	mu             sync.RWMutex
 }
 
 type Room struct {
@@ -29,11 +29,12 @@ func NewRoomHandler() *RoomHandler {
 	}
 }
 
+// Generate a unique roomId and return it as well.
 func (rh *RoomHandler) RoomIdGenerator() string {
 	return uuid.NewString()
 }
 
-// Find the room using its roomId
+// Find the room using its roomId.
 func (rh *RoomHandler) GetRoom(roomId string) (*Room, bool) {
 	rh.mu.RLock()
 	room, ok := rh.RoomIdToRoom[roomId]
@@ -41,115 +42,166 @@ func (rh *RoomHandler) GetRoom(roomId string) (*Room, bool) {
 	return room, ok
 }
 
-// route will be /create-room
-func (rh *RoomHandler) CreateRoom(w http.ResponseWriter, r *http.Request) {
-	roomId := rh.RoomIdGenerator()
+// Find the roomId for a given userId
+func (rh *RoomHandler) RoomIdForUser(userId string) (string, bool) {
+	rh.mu.RLock()
+	roomId, ok := rh.UserIdToRoomId[userId]
+	rh.mu.RUnlock()
 
-	var body models.CreateRoomRequest
+	return roomId, ok
+}
 
-	err := json.NewDecoder(r.Body).Decode(&body)
-	if err != nil {
-		log.Println("Error decoding the create room request as json: ", err)
-		return
+func (rh *RoomHandler) GetOtherPeersFromARoom(roomId string, userId string) ([]*models.Client, bool) {
+	//get the room
+	room, ok := rh.GetRoom(roomId)
+
+	if !ok {
+		log.Println("Error while getting other peers from a room")
+		return nil, false
 	}
+
+	//read the clients map from the room.UserIdToRoomId and return all the users except the userId from the parameters
+
+	var otherUsers []*models.Client
+	for id, client := range room.UserIdToClient {
+		if id == userId {
+			continue
+		}
+		otherUsers = append(otherUsers, client)
+	}
+
+	return otherUsers, true
+}
+
+// triggers on listening to "create-room" event
+func (rh *RoomHandler) CreateRoom(createRoomMessage *models.CreateRoomMessage, client *models.Client) {
+	roomId := rh.RoomIdGenerator()
+	userId := createRoomMessage.UserId
 
 	room := &Room{
 		RoomId:         roomId,
 		UserIdToClient: make(map[string]*models.Client),
 	}
 
-	client := &models.Client{
-		RoomId: roomId,
-		UserId: body.UserId,
-	}
+	client.RoomId = roomId
+	client.UserId = userId
 
+	// Add roomId->room
 	rh.mu.Lock()
 	rh.RoomIdToRoom[roomId] = room
 	rh.mu.Unlock()
 
+	// Add the userid->roomid
+	rh.mu.Lock()
+	rh.UserIdToRoomId[userId] = roomId
+	rh.mu.Unlock()
+
+	//Add UserId in the room map
 	room.mu.Lock()
-	room.UserIdToClient[body.UserId] = client
+	room.UserIdToClient[userId] = client
 	room.mu.Unlock()
 
-	//emit the create-room or join-room event
-}
-
-// route will be /join-room
-func (rh *RoomHandler) JoinRoom(w http.ResponseWriter, r *http.Request) {
-	//Check if room even exists
-	var body models.JoinRoomRequest
-
-	//Decode the body of the request
-	err := json.NewDecoder(r.Body).Decode(&body)
-	if err != nil {
-		log.Println("Error decoding the join room request as json: ", err)
-		return
+	// emit the create-room event
+	successMsg := models.CreateRoomSuccessMessage{
+		Type:   "create-room-success",
+		RoomId: roomId,
+		UserId: userId,
 	}
 
-	//Get the room from roomId
-	room, ok := rh.GetRoom(body.RoomId)
+	client.SafeSend(client, successMsg)
+}
+
+// triggers on listening to "join-room" event
+func (rh *RoomHandler) JoinRoom(joinRoomMessage *models.JoinRoomMessage, client *models.Client) {
+	roomId := joinRoomMessage.RoomId
+	userId := joinRoomMessage.UserId
+
+	// Get the room from roomId and check if it even exists
+	room, ok := rh.GetRoom(roomId)
 	if !ok {
-		http.Error(w, "No such room with this roomId exists", http.StatusNotFound)
+		// http.Error(w, "No such room with this roomId exists", http.StatusNotFound)
+		// emit the error instead
+		errMsg := models.ErrorMessage{
+			Type:       "error",
+			Error:      "No such room with this roomId exists",
+			StatusCode: "ROOM_NOT_FOUND",
+		}
+		client.SafeSend(client, errMsg)
 		return
 	}
 
 	room.mu.Lock()
-	_, exists := room.UserIdToClient[body.UserId]
+	_, exists := room.UserIdToClient[userId]
 	room.mu.Unlock()
 
 	if exists {
-		http.Error(w, "user already exists", http.StatusBadRequest)
+		// http.Error(w, "user already exists", http.StatusBadRequest)
+		// emit the error instead
+		errMsg := models.ErrorMessage{
+			Type:       "error",
+			Error:      "User with userId already exists",
+			StatusCode: "USER_EXISTS",
+		}
+		client.SafeSend(client, errMsg)
 		return
 	}
 
-	//create a client object. This object is incomplete atp the other fields are null by default
-	client := &models.Client{
-		UserId: body.UserId,
-		RoomId: body.RoomId,
-	}
+	//Use the client we get as the param only and update that only.
+	client.UserId = userId
+	client.RoomId = roomId
 
-	//add the client in the room
+	//add the client in the room.
 	room.mu.Lock()
-	room.UserIdToClient[body.UserId] = client
+	room.UserIdToClient[userId] = client
 	room.mu.Unlock()
 
-	//emit the join-room event
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-
-	// json.NewEncoder(w).Encode()
-}
-
-// route will be /leave-room
-func (rh *RoomHandler) LeaveRoom(w http.ResponseWriter, r *http.Request) {
-	var body models.LeaveRoomRequest
-
-	//decode the body of the request
-	err := json.NewDecoder(r.Body).Decode(&body)
-	if err != nil {
-		log.Println("Error decoding the leave room request as json: ", err)
-		return
+	//emit the join-room-success event to let the frontend know that the user was added to the room succesfully.
+	successMsg := models.JoinRoomSuccessMessage{
+		Type:   "join-room-success",
+		RoomId: roomId,
+		UserId: userId,
 	}
 
+	client.SafeSend(client, successMsg)
+}
+
+// triggers on listening to "leave-room" event
+func (rh *RoomHandler) LeaveRoom(leaveRoomMessage *models.LeaveRoomMessage, client *models.Client) {
+	roomId := leaveRoomMessage.RoomId
+	userId := leaveRoomMessage.UserId
+
 	//Check if the room even exists or not
-	room, ok := rh.GetRoom(body.RoomId)
+	room, ok := rh.GetRoom(roomId)
 	if !ok {
-		http.Error(w, "No such room with this roomId exists", http.StatusNotFound)
+		// http.Error(w, "No such room with this roomId exists", http.StatusNotFound)
+		// emit the error instead
+		errMsg := models.ErrorMessage{
+			Type:       "error",
+			Error:      "No such room with this roomId exists",
+			StatusCode: "ROOM_NOT_FOUND",
+		}
+		client.SafeSend(client, errMsg)
 		return
 	}
 
 	//delete the client from the room
 	room.mu.Lock()
-	defer room.mu.Unlock()
-	delete(room.UserIdToClient, body.UserId)
+	delete(room.UserIdToClient, userId)
+	room.mu.Unlock()
 
-	rh.CleanRoom(body.RoomId)
+	rh.CleanRoom(roomId)
 
 	//emit the leave-room event
+	successMsg := models.LeaveRoomSuccessMessage{
+		Type:   "leave-room-success",
+		RoomId: roomId,
+		UserId: userId,
+	}
+
+	client.SafeSend(client, successMsg)
 }
 
-// route will be /view-room
+// route will be /view-room.
 func (rh *RoomHandler) ViewRoom(w http.ResponseWriter, r *http.Request) {
 
 }
@@ -159,11 +211,12 @@ func (rh *RoomHandler) CleanRoom(roomId string) {
 	room, ok := rh.GetRoom(roomId)
 	if !ok {
 		log.Println("Room with this roomid does not exist")
+		return
 	}
 
-	room.mu.Lock()
+	room.mu.RLock()
 	isEmpty := len(room.UserIdToClient) == 0
-	room.mu.Unlock()
+	room.mu.RUnlock()
 
 	if !isEmpty {
 		log.Println("This room still has clients can not clean it")

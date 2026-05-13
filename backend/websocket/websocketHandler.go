@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"backend/handlers"
 	"backend/models"
 	"backend/sfu"
 	"encoding/json"
@@ -17,7 +18,8 @@ var upgrader = websocket.Upgrader{
 }
 
 type WsHandler struct {
-	SFU *sfu.SFU
+	SFU         *sfu.SFU
+	RoomHandler *handlers.RoomHandler
 }
 
 func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
@@ -33,6 +35,13 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	log.Println("[WS] Websocket connected successfully")
+
+	client := models.Client{
+		Conn: conn,
+		Send: make(chan any, 256),
+	}
+
+	log.Println("[WS] Client created succesfully")
 
 	//The backend must listen for the WS events continously so we run a infinite for loop.
 	for {
@@ -64,8 +73,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 		switch base.Type {
 
 		case "offer":
-
-			log.Println("[WS] Handling offer message")
+			log.Println("[WS] Handling offer message in the backend")
 
 			//handle offer event
 			var signal models.SignalMessage
@@ -78,13 +86,12 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 
 			log.Println("[WS] Calling SFU.HandleOffer")
 
-			wh.SFU.HandleOffer(signal, conn)
+			wh.SFU.HandleOffer(signal, conn, &client)
 
 			log.Println("[WS] Finished SFU.HandleOffer")
 
 		case "ice-candidate":
-
-			log.Println("[WS] Handling ICE candidate message")
+			log.Println("[WS] Handling ICE candidate message in the backend")
 
 			//Handle ice candidate event
 			var iceMessage models.ICECandidateMessage
@@ -101,11 +108,44 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 
 			log.Println("[WS] Finished SFU.HandleICECandidate")
 
+		case "create-room":
+			log.Println("[WS] create-room event received in the backend")
+
+			var createRoomMessage models.CreateRoomMessage
+
+			err := json.Unmarshal(msg, &createRoomMessage)
+			if err != nil {
+				log.Println("[WS] Error decoding create-room message:", err)
+				return
+			}
+
+			wh.RoomHandler.CreateRoom(&createRoomMessage, &client)
+
 		case "join-room":
+			log.Println("[WS] join-room event received in the backend")
 
-			log.Println("[WS] join-room event received")
+			var joinRoomMessage models.JoinRoomMessage
 
-			//Handle join room event
+			err := json.Unmarshal(msg, &joinRoomMessage)
+			if err != nil {
+				log.Println("[WS] Error decoding join-room message:", err)
+				return
+			}
+
+			wh.RoomHandler.JoinRoom(&joinRoomMessage, &client)
+
+		case "leave-room":
+			log.Println("[WS] leave-room event received in the backend")
+
+			var leaveRoomMessage models.LeaveRoomMessage
+
+			err := json.Unmarshal(msg, &leaveRoomMessage)
+			if err != nil {
+				log.Println("[WS] Error decoding join-room message:", err)
+				return
+			}
+
+			wh.RoomHandler.LeaveRoom(&leaveRoomMessage, &client)
 
 		default:
 			log.Println("[WS] Unknown message type received:", base.Type)

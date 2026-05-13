@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 
+	"backend/handlers"
 	"backend/sfu"
 	"backend/websocket"
 )
@@ -15,10 +16,13 @@ func setupRoutes(wsHandler *websocket.WsHandler) {
 func main() {
 	log.Println("Main server has started")
 
-	sfuInstance := sfu.NewSFU()
+	roomHandler := handlers.NewRoomHandler()
+
+	sfuInstance := sfu.NewSFU(roomHandler)
 
 	wsHandler := &websocket.WsHandler{
-		SFU: sfuInstance,
+		SFU:         sfuInstance,
+		RoomHandler: roomHandler,
 	}
 
 	setupRoutes(wsHandler)

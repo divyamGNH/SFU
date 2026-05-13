@@ -11,19 +11,21 @@ import (
 
 type SFU struct {
 	ConnToClient map[*websocket.Conn]*models.Client
+	rm           RoomManager
 	mu           sync.RWMutex
 }
 
-func NewSFU() *SFU {
+func NewSFU(roomManager RoomManager) *SFU {
 
 	log.Println("[SFU] Creating new SFU instance")
 
 	return &SFU{
 		ConnToClient: make(map[*websocket.Conn]*models.Client),
+		rm:           roomManager,
 	}
 }
 
-func (s *SFU) HandleOffer(signal models.SignalMessage, conn *websocket.Conn) {
+func (s *SFU) HandleOffer(signal models.SignalMessage, conn *websocket.Conn, client *models.Client) {
 
 	log.Println("[HandleOffer] Received offer")
 
@@ -44,14 +46,11 @@ func (s *SFU) HandleOffer(signal models.SignalMessage, conn *websocket.Conn) {
 
 	log.Println("[HandleOffer] PeerConnection created successfully")
 
-	//Create the client object
-	client := &models.Client{
-		Conn: conn,
-		PC:   pc,
+	// Earlier approach - Create the client object
+	// We already get the client from the WS handler now
 
-		//Actually create a channel
-		Send: make(chan any, 256),
-	}
+	// Add the PC to the client received
+	client.PC = pc
 
 	log.Println("[HandleOffer] Client object created")
 
@@ -74,9 +73,18 @@ func (s *SFU) HandleOffer(signal models.SignalMessage, conn *websocket.Conn) {
 			return
 		}
 
-		//TODO : send it to the other peers in the room or other logic
-		// otherPeers.AddTrack(localStream)
+		// var otherPeers []*models.Client
+		otherPeers, ok := s.rm.GetOtherPeersFromARoom(client.RoomId, client.UserId)
+		if !ok {
+			log.Println("[SFU] Error getting the other peers in the room")
+			return
+		}
+
+		// TODO : Should store/read RTCP packets from sender.
 		//Need to manage something called RTCP packet reading as well here look into that later
+		for _, peer := range otherPeers {
+			peer.PC.AddTrack(localTrack)
+		}
 
 		//Manually handle each rtp packet
 		//Can change and monitor everything such as codecs etc.
