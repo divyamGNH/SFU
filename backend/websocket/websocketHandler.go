@@ -40,8 +40,10 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 		Conn: conn,
 		Send: make(chan any, 256),
 	}
-
 	log.Println("[WS] Client created succesfully")
+
+	go client.WritePump()
+	log.Println("[HandleOffer] WritePump started")
 
 	//The backend must listen for the WS events continously so we run a infinite for loop.
 	for {
@@ -104,7 +106,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 
 			log.Println("[WS] Calling SFU.HandleICECandidate")
 
-			wh.SFU.HandleICECandidate(iceMessage, conn)
+			wh.SFU.HandleICECandidate(iceMessage, &client)
 
 			log.Println("[WS] Finished SFU.HandleICECandidate")
 

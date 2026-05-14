@@ -2,6 +2,7 @@ package models
 
 import (
 	"log"
+	"sync"
 
 	"github.com/gorilla/websocket"
 	"github.com/pion/webrtc/v3"
@@ -11,12 +12,20 @@ import (
 
 // TODO : Currently we get the userId from the frontend which is not okay even with auth implemented we need to generate the userId on the server side
 type Client struct {
-	UserId string                 `json:"userId"`
-	RoomId string                 `json:"roomId"`
-	Conn   *websocket.Conn        `json:"conn"`
-	PC     *webrtc.PeerConnection `json:"pc"`
+	UserId  string                 `json:"userId"`
+	RoomId  string                 `json:"roomId"`
+	Conn    *websocket.Conn        `json:"conn"`
+	PC      *webrtc.PeerConnection `json:"pc"`
+	SFUPeer *SFUPeer               `json:"peer"`
 
 	Send chan any
+}
+
+type SFUPeer struct {
+	PC                *webrtc.PeerConnection
+	RemoteDescSet     bool
+	PendingCandidates []ICECandidateMessage
+	Mu                sync.RWMutex
 }
 
 // Write pump is a function owned by the Client struct only
