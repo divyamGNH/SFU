@@ -25,6 +25,22 @@ func NewSFU(roomManager RoomManager) *SFU {
 	}
 }
 
+func (s *SFU) DrainRTCP(sender *webrtc.RTPSender) {
+	// Create a new go routine so this is basically a readPump
+	go func() {
+		rtcpBuf := make([]byte, 256)
+
+		//We are just reading this not using any of the RTCP packet actually just draining so the buffer does not crash the code.
+		for {
+			_, _, err := sender.Read(rtcpBuf)
+			if err != nil {
+				log.Println("[SFU] error in reading RTCP packet sender closed:", err)
+				return
+			}
+		}
+	}()
+}
+
 func (s *SFU) HandleOffer(signal models.SignalMessage, conn *websocket.Conn, client *models.Client) {
 
 	log.Println("[HandleOffer] Received offer")
@@ -80,10 +96,15 @@ func (s *SFU) HandleOffer(signal models.SignalMessage, conn *websocket.Conn, cli
 			return
 		}
 
-		// TODO : Should store/read RTCP packets from sender.
-		//Need to manage something called RTCP packet reading as well here look into that later
+		// TODO : Use RTCP packets for various things like bitrate etc instead of just draining them.
 		for _, peer := range otherPeers {
-			peer.PC.AddTrack(localTrack)
+			sender, err := peer.PC.AddTrack(localTrack)
+			if err != nil {
+				log.Println("Error adding track:", err)
+				continue
+			}
+
+			s.DrainRTCP(sender)
 		}
 
 		//Manually handle each rtp packet
