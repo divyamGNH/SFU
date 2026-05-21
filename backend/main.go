@@ -4,19 +4,54 @@ import (
 	"log"
 	"net/http"
 
-	"backend/handlers"
+	"backend/room"
 	"backend/sfu"
 	"backend/websocket"
+
+	"github.com/gorilla/mux"
 )
 
-func setupRoutes(wsHandler *websocket.WsHandler) {
-	http.HandleFunc("/ws", wsHandler.WebSocketHandler)
+func enableCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:3000")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+
+		// Handle preflight requests
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+func setupRoutes(
+	router *mux.Router,
+	wsHandler *websocket.WsHandler,
+	roomHandler *room.RoomHandler,
+) {
+
+	// websocket route
+	router.HandleFunc("/ws/{roomId}/{clientId}", wsHandler.WebSocketHandler)
+
+	// room routes
+	router.HandleFunc("/createroom", roomHandler.CreateRoom).Methods("POST")
+
+	router.HandleFunc("/joinroom/{roomId}", roomHandler.JoinRoom).Methods("POST")
+
+	router.HandleFunc("/leaveroom/{roomId}/{clientId}", roomHandler.LeaveRoom).Methods("POST")
+
+	router.HandleFunc("/viewroom/{roomId}", roomHandler.ViewRoom).Methods("GET")
 }
 
 func main() {
 	log.Println("Main server has started")
 
-	roomHandler := handlers.NewRoomHandler()
+	roomHandler := room.NewRoomHandler()
 
 	sfuInstance := sfu.NewSFU(roomHandler)
 
@@ -25,10 +60,14 @@ func main() {
 		RoomHandler: roomHandler,
 	}
 
-	setupRoutes(wsHandler)
+	router := mux.NewRouter()
 
-	err := http.ListenAndServe(":8080", nil)
-	//This is a fatal error that is why we do a log.Fatal
+	setupRoutes(router, wsHandler, roomHandler)
+
+	handler := enableCORS(router)
+
+	err := http.ListenAndServe(":8080", handler)
+
 	if err != nil {
 		log.Fatal("Could not start the HTTP server")
 	}

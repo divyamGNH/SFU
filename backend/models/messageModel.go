@@ -16,46 +16,54 @@ type SignalMessage struct {
 type ICECandidateMessage struct {
 	Type string `json:"type"`
 	//There are 2 such types webrtc.ICECandidateInit and webrtc.ICECandidate. We use webrtc.ICECandidateInit as the other one is the complete candidate object used by pion internally we dont wanna send all that data to the frontend over sockets its redundant.
-	Candidate webrtc.ICECandidateInit `json:"ICECandidate"`
+	ICECandidate webrtc.ICECandidateInit `json:"iceCandidate"`
 }
 
-type JoinRoomMessage struct {
+// user creates or joins the room he/she is eventually entering the room so only one event to just add the roomId to the user struct
+type PopulateRoomMessage struct {
 	Type   string `json:"type"`
 	RoomId string `json:"roomId"`
-	UserId string `json:"userId"`
-}
-
-type CreateRoomMessage struct {
-	Type   string `json:"type"`
-	UserId string `json:"userId"`
+	UserId string `json:"clientId"`
 }
 
 type LeaveRoomMessage struct {
 	Type   string `json:"type"`
 	RoomId string `json:"roomId"`
-	UserId string `json:"userId"`
+	UserId string `json:"clientId"`
 }
 
 type ErrorMessage struct {
 	Type       string `json:"type"`
 	Error      string `json:"error"`
-	StatusCode string `json:"statusCode`
+	StatusCode string `json:"statusCode"`
+}
+
+type JoinRoomResponse struct {
+	RoomId string `json:"roomId"`
+	UserId string `json:"clientId"`
+}
+
+type LeaveRoomResponse struct {
+	Message string `json:"message"`
+}
+
+type ErrorResponse struct {
+	Message string `json:"message"`
 }
 
 type JoinRoomSuccessMessage struct {
 	Type   string `json:"type"`
 	RoomId string `json:"roomId"`
-	UserId string `json:"userId"`
+	UserId string `json:"clientId"`
 }
 
 type CreateRoomSuccessMessage struct {
-	Type   string `json:"type"`
 	RoomId string `json:"roomId"`
-	UserId string `json:"userId"`
+	UserId string `json:"clientId"`
 }
 
 type LeaveRoomSuccessMessage struct {
 	Type   string `json:"type"`
 	RoomId string `json:"roomId"`
-	UserId string `json:"userId"`
+	UserId string `json:"clientId"`
 }

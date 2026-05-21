@@ -16,9 +16,6 @@ type SFU struct {
 }
 
 func NewSFU(roomManager RoomManager) *SFU {
-
-	log.Println("[SFU] Creating new SFU instance")
-
 	return &SFU{
 		ConnToClient: make(map[*websocket.Conn]*models.Client),
 		rm:           roomManager,
@@ -61,7 +58,7 @@ func (s *SFU) FlushICECandidateQueue(client *models.Client) {
 
 	for _, candidate := range candidates {
 		//Add the Ice candidate to the queue and wait for the remote description to set.
-		err := client.SFUPeer.PC.AddICECandidate(candidate.Candidate)
+		err := client.SFUPeer.PC.AddICECandidate(candidate.ICECandidate)
 		if err != nil {
 			log.Println("[HandleICECandidate] Error adding ICE candidate to the queue:", err)
 			return
@@ -71,7 +68,7 @@ func (s *SFU) FlushICECandidateQueue(client *models.Client) {
 
 func (s *SFU) HandleOffer(signal models.SignalMessage, conn *websocket.Conn, client *models.Client) {
 
-	log.Println("[HandleOffer] Received offer")
+	log.Println("[SFU] Received offer")
 
 	//Create a new PeerConnection object
 	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{
@@ -88,7 +85,7 @@ func (s *SFU) HandleOffer(signal models.SignalMessage, conn *websocket.Conn, cli
 		return
 	}
 
-	log.Println("[HandleOffer] PeerConnection created successfully")
+	// log.Println("[HandleOffer] PeerConnection created successfully")
 
 	// Earlier approach - Create the client object
 	// We already get the client from the WS handler now
@@ -101,12 +98,10 @@ func (s *SFU) HandleOffer(signal models.SignalMessage, conn *websocket.Conn, cli
 	}
 	client.SFUPeer = sfuPeer
 
-	log.Println("[HandleOffer] Client object created")
-
 	//Set up pc events onTrack, onICECandidates, onConnectionStateChange
 	pc.OnTrack(func(remoteTrack *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
 
-		log.Println("[OnTrack] Received new media track")
+		log.Println("[SFU] Received new media track")
 
 		localTrack, err := webrtc.NewTrackLocalStaticRTP(
 			remoteTrack.Codec().RTPCodecCapability,
@@ -114,7 +109,7 @@ func (s *SFU) HandleOffer(signal models.SignalMessage, conn *websocket.Conn, cli
 			remoteTrack.StreamID(),
 		)
 		if err != nil {
-			log.Println("[OnTrack] Error creating localTrack:", err)
+			log.Println("[SFU] Error creating localTrack:", err)
 			return
 		}
 
@@ -129,7 +124,7 @@ func (s *SFU) HandleOffer(signal models.SignalMessage, conn *websocket.Conn, cli
 		for _, peer := range otherPeers {
 			sender, err := peer.SFUPeer.PC.AddTrack(localTrack)
 			if err != nil {
-				log.Println("Error adding track:", err)
+				log.Println("[SFU] Error adding track:", err)
 				continue
 			}
 
@@ -144,38 +139,38 @@ func (s *SFU) HandleOffer(signal models.SignalMessage, conn *websocket.Conn, cli
 			packet, _, err := remoteTrack.ReadRTP()
 
 			if err != nil {
-				log.Println("[OnTrack] Error reading RTP packet:", err)
+				log.Println("[SFU] Error reading RTP packet:", err)
 				break
 			}
 
 			//send each packet to through the pipeline made for media transfer using AddTrack
 			err = localTrack.WriteRTP(packet)
 			if err != nil {
-				log.Println("[OnTrack] Error forwarding RTP packet:", err)
+				log.Println("[SFU] Error forwarding RTP packet:", err)
 				break
 			}
 		}
 	})
 
 	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
-		log.Println("[Connection]", state)
+		log.Println("[SFU] Connection state is:", state)
 		//implement cleanup and re connection logic here
 	})
 
 	pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
-		log.Println("[ICE]", state)
+		log.Println("[SFU] ICE state is:", state)
 	})
 
 	//Set up the received remote SDP
 	//trickle ice is started as soon i set any description local or remote
 	err = pc.SetRemoteDescription(signal.SDP)
 	if err != nil {
-		log.Println("[HandleOffer] Error setting remote description:", err)
+		log.Println("[SFU] Error setting remote description:", err)
 		pc.Close()
 		return
 	}
 
-	log.Println("[HandleOffer] Remote description set successfully")
+	// log.Println("[SFU] Remote description set successfully")
 
 	// Set the boolean true so that we can start flushing the ice candidate queue.
 	client.SFUPeer.Mu.Lock()
@@ -187,12 +182,12 @@ func (s *SFU) HandleOffer(signal models.SignalMessage, conn *websocket.Conn, cli
 	//Create answer
 	localSDP, err := pc.CreateAnswer(nil)
 	if err != nil {
-		log.Println("[HandleOffer] Error creating answer:", err)
+		log.Println("[SFU] Error creating answer:", err)
 		pc.Close()
 		return
 	}
 
-	log.Println("[HandleOffer] Answer created successfully")
+	// log.Println("[SFU] Answer created successfully")
 
 	answer := models.SignalMessage{
 		Type: "answer",
@@ -202,12 +197,12 @@ func (s *SFU) HandleOffer(signal models.SignalMessage, conn *websocket.Conn, cli
 	//Set up local description
 	err = pc.SetLocalDescription(localSDP)
 	if err != nil {
-		log.Println("[HandleOffer] Error setting local description:", err)
+		log.Println("[SFU] Error setting local description:", err)
 		pc.Close()
 		return
 	}
 
-	log.Println("[HandleOffer] Local description set successfully")
+	// log.Println("[SFU] Local description set successfully")
 
 	pc.OnICECandidate(func(candidate *webrtc.ICECandidate) {
 
@@ -220,8 +215,8 @@ func (s *SFU) HandleOffer(signal models.SignalMessage, conn *websocket.Conn, cli
 
 		// Create a object to send to the frontend
 		msg := models.ICECandidateMessage{
-			Type:      "ice-candidate",
-			Candidate: candidateJSON,
+			Type:         "ice-candidate",
+			ICECandidate: candidateJSON,
 		}
 
 		// Emit a socket event for frontend to catch this ice candidate
@@ -232,13 +227,12 @@ func (s *SFU) HandleOffer(signal models.SignalMessage, conn *websocket.Conn, cli
 	s.ConnToClient[conn] = client
 	s.mu.Unlock()
 
-	log.Println("[HandleOffer] Client added to ConnToClient map")
+	// log.Println("[SFU] Client added to ConnToClient map")
 
 	client.Send <- answer
 
-	log.Println("[HandleOffer] Answer pushed into WritePump channel")
-
-	log.Println("[HandleOffer] Offer handling completed successfully")
+	log.Println("[SFU] Answer pushed into WritePump channel")
+	log.Println("[SFU] Offer handling completed successfully")
 }
 
 // Implement a queue to prevent drop of ice candidates as they might arrive before or after the setDescription
@@ -254,9 +248,9 @@ func (s *SFU) HandleICECandidate(candidate models.ICECandidateMessage, client *m
 	}
 	client.SFUPeer.Mu.Unlock()
 
-	err := client.SFUPeer.PC.AddICECandidate(candidate.Candidate)
+	err := client.SFUPeer.PC.AddICECandidate(candidate.ICECandidate)
 	if err != nil {
-		log.Println("[HandleICECandidate] Error adding ICE candidate to the queue:", err)
+		log.Println("[SFU] Error adding ICE candidate to the queue:", err)
 		return
 	}
 }
