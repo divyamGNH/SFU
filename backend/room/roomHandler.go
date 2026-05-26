@@ -57,6 +57,34 @@ func (rh *RoomHandler) RoomIdForUser(userId string) (string, bool) {
 	return roomId, ok
 }
 
+func (rh *RoomHandler) GetClientFromUserId(userId string) (*models.Client, bool) {
+	// Get the roomId for this user
+	roomId, ok := rh.RoomIdForUser(userId)
+	if !ok {
+		log.Println("[ROOM] No room found for this userId")
+		return nil, false
+	}
+
+	// Get the room using the roomId
+	room, ok := rh.GetRoom(roomId)
+	if !ok {
+		log.Println("[ROOM] Room does not exist")
+		return nil, false
+	}
+
+	// Get the client from the room
+	room.Mu.RLock()
+	client, exists := room.UserIdToClient[userId]
+	room.Mu.RUnlock()
+
+	if !exists {
+		log.Println("[ROOM] Client not found in room")
+		return nil, false
+	}
+
+	return client, true
+}
+
 func (rh *RoomHandler) GetOtherPeersFromARoom(roomId string, userId string) ([]*models.Client, bool) {
 	//get the room
 	log.Println("Getting peers from the room")

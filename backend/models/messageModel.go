@@ -23,13 +23,13 @@ type ICECandidateMessage struct {
 type PopulateRoomMessage struct {
 	Type   string `json:"type"`
 	RoomId string `json:"roomId"`
-	UserId string `json:"clientId"`
+	UserId string `json:"userId"`
 }
 
 type LeaveRoomMessage struct {
 	Type   string `json:"type"`
 	RoomId string `json:"roomId"`
-	UserId string `json:"clientId"`
+	UserId string `json:"userId"`
 }
 
 type ErrorMessage struct {
@@ -40,7 +40,7 @@ type ErrorMessage struct {
 
 type JoinRoomResponse struct {
 	RoomId string `json:"roomId"`
-	UserId string `json:"clientId"`
+	UserId string `json:"userId"`
 }
 
 type LeaveRoomResponse struct {
@@ -54,16 +54,22 @@ type ErrorResponse struct {
 type JoinRoomSuccessMessage struct {
 	Type   string `json:"type"`
 	RoomId string `json:"roomId"`
-	UserId string `json:"clientId"`
+	UserId string `json:"userId"`
 }
 
 type CreateRoomSuccessMessage struct {
 	RoomId string `json:"roomId"`
-	UserId string `json:"clientId"`
+	UserId string `json:"userId"`
 }
 
 type LeaveRoomSuccessMessage struct {
 	Type   string `json:"type"`
 	RoomId string `json:"roomId"`
-	UserId string `json:"clientId"`
+	UserId string `json:"userId"`
+}
+
+type PublishMediaMessage struct {
+	Type      string `json:"type"`
+	Mid       string `json:"mid"`
+	Publisher string `json:"publisher"`
 }

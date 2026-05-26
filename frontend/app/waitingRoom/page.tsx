@@ -1,22 +1,12 @@
-//TODO : Add tranceivers instead of AddTrack.
-//TODO : Handle the received media correctly basically fix onTrack function.
-//TODO : Backend does not have auth add auth here.
-
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState, useRef, useEffect } from "react";
-
-// type RoomClient = {
-//   clientId: string;
-// };
-
-// type TurnCredentialsResponse = {
-//   username: string;
-//   credential: string;
-//   urls: string[];
-//   ttl: number;
-// };
+import type {
+  ClientToServerMessage,
+  ServerToClientMessage,
+  SubscriberAnswerMessage,
+} from "@/types/wsMessageTypes";
 
 export default function WaitingPage() {
   const BASE_URL =
@@ -27,28 +17,45 @@ export default function WaitingPage() {
   const WS_BASE_URL = BASE_URL.replace(/^http/, "ws");
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
+  const subscriberPcRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
-  const messageQueueRef = useRef<unknown[]>([]);
+  const messageQueueRef = useRef<ClientToServerMessage[]>([]);
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
 
   const [otherPeers, setOtherPeers] = useState<string[]>([]);
 
   const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
-  const remoteVideoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
+  const pendingSubscriberIceCandidatesRef = useRef<
+    RTCIceCandidateInit[]
+  >([]);
+
+  const pendingTracksRef = useRef<Record<string, RTCTrackEvent[]>>({});
+
+  const remoteVideoRefs = useRef<
+    Record<string, HTMLVideoElement | null>
+  >({});
+
+  const remoteStreamsRef = useRef<Record<string, MediaStream>>({});
+
   const hasInitializedRef = useRef<boolean>(false);
+
+  const midToPublisherRef = useRef<
+    Record<string, string | null>
+  >({});
 
   const searchParams = useSearchParams();
 
   const roomId = searchParams.get("roomId");
-  const clientId = searchParams.get("clientId");
+  const userId = searchParams.get("userId");
 
   const router = useRouter();
 
-  // Send ws messages.
-  function sendMessage(msg: unknown) {
+  // Send ws messages Helper.
+  function sendMessage(msg: ClientToServerMessage) {
     const ws = wsRef.current;
 
+    // Check if the ws state, if not ready push to the messageQueue.
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       messageQueueRef.current.push(msg);
       return;
@@ -70,34 +77,29 @@ export default function WaitingPage() {
   };
 
   // PC cleanup Helper
-  const pcCleanup = () => {
-    const pc = pcRef.current;
-
+  const pcCleanup = (pc: RTCPeerConnection | null) => {
     if (!pc) return;
 
     pc.onicecandidate = null;
     pc.ontrack = null;
     pc.onsignalingstatechange = null;
     pc.close();
-
-    pcRef.current = null;
   };
 
   // Add the pending ice candidates from the queue.
-  async function flushPendingIceCandidates() {
-    const pc = pcRef.current;
-
+  async function flushPendingIceCandidates(
+    pc: RTCPeerConnection | null,
+    queue: RTCIceCandidateInit[],
+  ) {
     if (!pc || !pc.remoteDescription) {
       return;
     }
-
-    //Get the queue
-    const queue = pendingIceCandidatesRef.current || [];
 
     if (queue.length === 0) {
       return;
     }
 
+    // Use the queue elements.
     for (const candidate of queue) {
       try {
         await pc.addIceCandidate(candidate);
@@ -107,18 +109,18 @@ export default function WaitingPage() {
     }
 
     //Empty the queue.
-    pendingIceCandidatesRef.current = [];
+    queue.length = 0;
   }
 
   // Decide wether ice candidate to be added directly or to the queue.
-  async function queueOrAddIceCandidate(candidate: RTCIceCandidateInit) {
-    const pc = pcRef.current;
-
+  async function queueOrAddIceCandidate(
+    pc: RTCPeerConnection | null,
+    candidate: RTCIceCandidateInit,
+    queue: RTCIceCandidateInit[],
+  ) {
+    // If pc not set or remoteSDP not set push in the queue.
     if (!pc || !pc.remoteDescription) {
-      const queued = pendingIceCandidatesRef.current || [];
-
-      queued.push(candidate);
-
+      queue.push(candidate);
       return;
     }
 
@@ -137,64 +139,25 @@ export default function WaitingPage() {
       },
     ];
 
-    //TODO : Use the implemented TURN server.
-    // if (!roomId || !clientId) {
-    //   return fallbackServers;
-    // }
-
-    // try {
-    //   const res = await fetch(
-    //     `${BASE_URL}/room/${roomId}/${clientId}/turn-credentials`,
-    //   );
-
-    //   if (!res.ok) {
-    //     const txt = await res.text();
-
-    //     console.warn(
-    //       `TURN credentials unavailable (${res.status}). Falling back to STUN only. ${txt}`,
-    //     );
-
-    //     return fallbackServers;
-    //   }
-
-    //   const turn = (await res.json()) as TurnCredentialsResponse;
-
-    //   if (!turn.urls?.length || !turn.username || !turn.credential) {
-    //     return fallbackServers;
-    //   }
-
-    //   return [
-    //     {
-    //       urls: "stun:stun.l.google.com:19302",
-    //     },
-    //     {
-    //       urls: turn.urls,
-    //       username: turn.username,
-    //       credential: turn.credential,
-    //     },
-    //   ];
-    // } catch (error) {
-    //   console.warn("Failed fetching TURN credentials, using STUN only", error);
-
-    //   return fallbackServers;
-    // }
-
     return fallbackServers;
   }
 
   // Remove the peer that left from the room states.
-  const removePeer = (leftClientId: string) => {
-    setOtherPeers((prev) => prev.filter((peerId) => peerId !== leftClientId));
+  const removePeer = (leftUserId: string) => {
+    setOtherPeers((prev) =>
+      prev.filter((peerId) => peerId !== leftUserId),
+    );
 
-    delete remoteVideoRefs.current[leftClientId];
+    delete remoteVideoRefs.current[leftUserId];
+    delete remoteStreamsRef.current[leftUserId];
   };
 
   // handle the leave button or a unexpected leave of the user from the call.
   async function handleLeave() {
-    if (!clientId) return;
+    if (!userId) return;
 
     const res = await fetch(
-      `http://localhost:8080/leaveroom/${roomId}/${clientId}`,
+      `http://localhost:8080/leaveroom/${roomId}/${userId}`,
       {
         method: "POST",
         headers: {
@@ -203,65 +166,60 @@ export default function WaitingPage() {
       },
     );
 
+    // TODO : Handle support to handle all the status codes.
     if (res.status != 200) {
       console.log("Error leaving room");
       return;
     }
 
-    pcCleanup();
+    // Stop all the local tracks majorly clients own audio and video.
+    localStreamRef.current?.getTracks().forEach((track) => {
+      track.stop();
+    });
+
+    pcCleanup(pcRef.current);
+    pcCleanup(subscriberPcRef.current);
     wsCleanup();
 
+    pcRef.current = null;
+    subscriberPcRef.current = null;
+
+    // TODO : Make sure all the states are cleaned up properly.
+    hasInitializedRef.current = false;
     localStreamRef.current = null;
     localVideoRef.current = null;
     messageQueueRef.current = [];
     pendingIceCandidatesRef.current = [];
+    pendingSubscriberIceCandidatesRef.current = [];
+    remoteStreamsRef.current = {};
+    remoteVideoRefs.current = {};
 
     router.push("/dashboard");
   }
 
   // Create short ids for UI purposes.
   const shortId = (id: string | null) => {
-    if (!id) return "unknown";
+    if (!id) {
+      console.log(
+        "A unknown userId probably null value has appeared.",
+      );
+
+      return "unknown";
+    }
 
     if (id.length <= 10) return id;
 
     return `${id.slice(0, 6)}...${id.slice(-4)}`;
   };
 
-  // async function leaveCall() {
-  //   const closeRes = await fetch(
-  //     `${BASE_URL}/leaveroom/${roomId}/${clientId}`,
-  //     {
-  //       method: "DELETE",
-  //     },
-  //   );
-
-  //   return closeRes;
-  // }
-
-  // async function handleLeaveClick() {
-  //   console.log("Leaving the call");
-
-  //   try {
-  //     await leaveCall();
-
-  //     wsRef.current?.close();
-
-  //     router.push("/dashboard");
-  //   } catch (error) {
-  //     console.error("Failed to leave room:", error);
-  //   }
-  // }
-
   //We did not put this in a try catch as this function is already called up in a try catch block itself and i need all the errors to be handleded by a single catch blocks.
   async function setupLocalStream() {
     console.log("Setting up the local stream");
+
     try {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-
-      const hasCamera = devices.some((d) => d.kind === "videoinput");
-
-      console.log(hasCamera);
+      if (localStreamRef.current) {
+        return;
+      }
 
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: true,
@@ -276,13 +234,16 @@ export default function WaitingPage() {
     } catch (error) {
       console.log(error);
 
-      throw new Error("setupLocalStream failed", { cause: error });
+      throw new Error("setupLocalStream failed", {
+        cause: error,
+      });
     }
   }
 
   // Create a PC and set up all the PC listener for events like ontrack, onice etc.
   async function createPeerConnection() {
     console.log("called create peer connection");
+
     try {
       if (!localStreamRef.current) {
         throw new Error("Local stream not initialized");
@@ -298,9 +259,24 @@ export default function WaitingPage() {
         iceServers,
       });
 
-      localStreamRef.current.getTracks().forEach((track) => {
-        pc.addTrack(track, localStreamRef.current!);
+      // Declare the audio tranceiver.
+      const audioTranceiver = pc.addTransceiver("audio", {
+        direction: "sendonly",
       });
+
+      // Declare the video tranceiver.
+      const videoTranceiver = pc.addTransceiver("video", {
+        direction: "sendonly",
+      });
+
+      // Send the audio and video through the tranceiver.
+      await audioTranceiver.sender.replaceTrack(
+        localStreamRef.current.getAudioTracks()[0],
+      );
+
+      await videoTranceiver.sender.replaceTrack(
+        localStreamRef.current.getVideoTracks()[0],
+      );
 
       pc.onicecandidate = (event) => {
         if (event.candidate) {
@@ -311,14 +287,12 @@ export default function WaitingPage() {
         }
       };
 
-      pc.ontrack = (event) => {
-        const stream = event.streams[0];
-
-        //TODO : Some-how receive the userId of the stream from the backend and store them in remoteVideoRefs
-      };
+      // Publisher PC does not need tracks.
 
       pc.oniceconnectionstatechange = () => {
-        console.log(`ICE connection state change: ${pc.iceConnectionState}`);
+        console.log(
+          `ICE connection state change: ${pc.iceConnectionState}`,
+        );
       };
 
       pc.onconnectionstatechange = () => {
@@ -333,17 +307,50 @@ export default function WaitingPage() {
     } catch (error) {
       console.log(error);
 
-      throw new Error("Error in creating the Peer Connection", {
-        cause: error,
-      });
+      throw new Error(
+        "Error in creating the Peer Connection",
+        {
+          cause: error,
+        },
+      );
+    }
+  }
+
+  // Attach tracks to the correct peer stream and UI.
+  function attachTrackToPeer(
+    publisherId: string,
+    track: MediaStreamTrack,
+  ) {
+    let stream = remoteStreamsRef.current[publisherId];
+
+    if (!stream) {
+      stream = new MediaStream();
+      remoteStreamsRef.current[publisherId] = stream;
+    }
+
+    const alreadyExists = stream
+      .getTracks()
+      .some((t) => t.id === track.id);
+
+    if (!alreadyExists) {
+      stream.addTrack(track);
+    }
+
+    const videoEl = remoteVideoRefs.current[publisherId];
+
+    if (videoEl && videoEl.srcObject !== stream) {
+      videoEl.srcObject = stream;
     }
   }
 
   //Listen to all the web socket calls in real-time.
   async function setupWebSocketListeners(ws: WebSocket) {
     console.log("called setUpWebsocketListeners");
+
     ws.onmessage = async (event) => {
-      const message = JSON.parse(event.data);
+      const message: ServerToClientMessage = JSON.parse(
+        event.data,
+      );
 
       switch (message.type) {
         case "answer":
@@ -355,7 +362,10 @@ export default function WaitingPage() {
 
           await pc.setRemoteDescription(message.sdp);
 
-          await flushPendingIceCandidates();
+          await flushPendingIceCandidates(
+            pc,
+            pendingIceCandidatesRef.current,
+          );
 
           break;
 
@@ -363,7 +373,11 @@ export default function WaitingPage() {
           console.log("ice triggered");
 
           if (message.iceCandidate && pcRef.current) {
-            await queueOrAddIceCandidate(message.iceCandidate);
+            await queueOrAddIceCandidate(
+              pcRef.current,
+              message.iceCandidate,
+              pendingIceCandidatesRef.current,
+            );
           }
 
           break;
@@ -371,21 +385,165 @@ export default function WaitingPage() {
         case "peer-joined":
           console.log("User joined room:", message.userId);
 
-          if (message.userId !== clientId) {
+          if (message.userId !== userId) {
             setOtherPeers((prev) =>
-              prev.includes(message.userId) ? prev : [...prev, message.userId],
+              prev.includes(message.userId)
+                ? prev
+                : [...prev, message.userId],
             );
           }
 
           break;
 
         case "peer-left":
-          console.log("User left room:", message.clientId);
+          console.log("User left room:", message.userId);
+
           removePeer(message.userId);
+
+          break;
+
+        case "subscriber-offer":
+          console.log("Subscriber offer received");
+
+          // Get all the ice server
+          const iceServers = await getIceServers();
+
+          // create offer
+          const subscriberPc = new RTCPeerConnection({
+            iceServers,
+          });
+
+          subscriberPcRef.current = subscriberPc;
+
+          subscriberPc.ontrack = (event) => {
+            const track = event.track;
+            const mid = event.transceiver.mid;
+
+            if (!mid) {
+              console.log("MID missing");
+              return;
+            }
+
+            const publisherId =
+              midToPublisherRef.current[mid];
+
+            // Queue track if publisher metadata not arrived yet
+            if (!publisherId) {
+              console.log("Queueing track for MID:", mid);
+
+              if (!pendingTracksRef.current[mid]) {
+                pendingTracksRef.current[mid] = [];
+              }
+
+              pendingTracksRef.current[mid].push(event);
+
+              return;
+            }
+
+            attachTrackToPeer(publisherId, track);
+
+            console.log(
+              `Attached ${track.kind} track for ${publisherId}`,
+            );
+          };
+
+          subscriberPc.onicecandidate = (event) => {
+            if (event.candidate) {
+              sendMessage({
+                type: "subscriber-ice-candidate",
+                iceCandidate: event.candidate.toJSON(),
+              });
+            }
+          };
+
+          subscriberPc.oniceconnectionstatechange = () => {
+            console.log(
+              `ICE connection state change for subscriber: ${subscriberPc.iceConnectionState}`,
+            );
+          };
+
+          subscriberPc.onconnectionstatechange = () => {
+            console.log(
+              `Subscriber Connection state: ${subscriberPc.connectionState} | Subscriber ICE state: ${subscriberPc.iceConnectionState}`,
+            );
+          };
+
+          // Set remoteDesc
+          await subscriberPc.setRemoteDescription(
+            message.sdp,
+          );
+
+          const answer =
+            await subscriberPc.createAnswer();
+
+          await subscriberPc.setLocalDescription(answer);
+
+          const subscriberAnswerMsg: SubscriberAnswerMessage =
+            {
+              type: "subscriber-answer",
+              sdp: answer,
+            };
+
+          sendMessage(subscriberAnswerMsg);
+
+          await flushPendingIceCandidates(
+            subscriberPcRef.current,
+            pendingSubscriberIceCandidatesRef.current,
+          );
+
+          break;
+
+        case "subscriber-ice-candidate":
+          console.log("Subscriber ice received");
+
+          //create a queue
+          //check if the remote desc is set if yes add them here else push to the queue
+          if (
+            message.iceCandidate &&
+            subscriberPcRef.current
+          ) {
+            await queueOrAddIceCandidate(
+              subscriberPcRef.current,
+              message.iceCandidate,
+              pendingSubscriberIceCandidatesRef.current,
+            );
+          }
+
+          break;
+
+        case "media-published":
+          console.log(
+            "Received media metadata",
+            message,
+          );
+
+          const mid = message.mid;
+          const publisher = message.publisher;
+
+          midToPublisherRef.current[mid] = publisher;
+
+          // Flush queued tracks for this MID
+          const pendingEvents =
+            pendingTracksRef.current[mid];
+
+          if (pendingEvents) {
+            for (const event of pendingEvents) {
+              attachTrackToPeer(
+                publisher,
+                event.track,
+              );
+            }
+
+            delete pendingTracksRef.current[mid];
+          }
+
           break;
 
         default:
-          console.log("Unknown websocket message:", message);
+          console.log(
+            "Unknown websocket message:",
+            message,
+          );
       }
     };
   }
@@ -394,11 +552,13 @@ export default function WaitingPage() {
   const settingRTCEnvironment = async () => {
     try {
       // Validate required parameters
-      if (!roomId || !clientId) {
-        console.error("Missing roomId or clientId from URL params");
+      if (!roomId || !userId) {
+        console.error(
+          "Missing roomId or userId from URL params",
+        );
 
         throw new Error(
-          `Invalid URL params: roomId=${roomId}, clientId=${clientId}`,
+          `Invalid URL params: roomId=${roomId}, userId=${userId}`,
         );
       }
 
@@ -409,7 +569,8 @@ export default function WaitingPage() {
 
       if (
         wsRef.current &&
-        (wsRef.current.readyState === WebSocket.CONNECTING ||
+        (wsRef.current.readyState ===
+          WebSocket.CONNECTING ||
           wsRef.current.readyState === WebSocket.OPEN)
       ) {
         console.log("WebSocket already exists");
@@ -417,11 +578,12 @@ export default function WaitingPage() {
       }
 
       // Set up the WebSocket connection
-      const wsUrl = `${WS_BASE_URL}/ws/${roomId}/${clientId}`;
+      const wsUrl = `${WS_BASE_URL}/ws/${roomId}/${userId}`;
 
       console.log("Connecting to WebSocket:", wsUrl);
 
       const ws = new WebSocket(wsUrl);
+
       wsRef.current = ws;
 
       // Set up error handler BEFORE any other handlers
@@ -429,23 +591,24 @@ export default function WaitingPage() {
         console.error("WebSocket error:", event);
 
         // Check if connection was refused from the backend.
-        if (event instanceof Event && event.type === "error") {
+        if (
+          event instanceof Event &&
+          event.type === "error"
+        ) {
           console.error(
             `Failed to connect to WebSocket. Make sure backend is running on ${BASE_URL}`,
           );
         }
       };
 
-      ws.onclose = async () => {
-        const closeRes = await handleLeave();
-        // await closeRes.json();
-
+      ws.onclose = () => {
         console.log("WebSocket disconnected");
       };
 
       // Set up open handler
       ws.onopen = async () => {
         console.log("ws.onopen triggered");
+
         // Clear the messaging queue.
         messageQueueRef.current.forEach((msg) => {
           ws.send(JSON.stringify(msg));
@@ -454,14 +617,17 @@ export default function WaitingPage() {
         messageQueueRef.current = [];
 
         sendMessage({
-          type : "populate-room",
-          roomId : roomId,
-          clientId : clientId,
+          type: "populate-room",
+          roomId: roomId,
+          userId: userId,
         });
 
-        console.log("WebSocket connected successfully");
+        console.log(
+          "WebSocket connected successfully",
+        );
 
         const pc = await createPeerConnection();
+
         const offer = await pc.createOffer();
 
         await pc.setLocalDescription(offer);
@@ -475,37 +641,49 @@ export default function WaitingPage() {
       // Set up all the WS listeners
       await setupWebSocketListeners(ws);
 
-      //TODO : Implement this viewroom in the backend.
       console.log("fetching other peers");
 
-      const res = await fetch(`${BASE_URL}/viewroom/${roomId}`, {
-        method: "GET",
-        headers: {
-          "Content-Type": "application/json",
+      const res = await fetch(
+        `${BASE_URL}/viewroom/${roomId}`,
+        {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+          },
         },
-      });
+      );
 
       if (!res.ok) {
         const txt = await res.text();
 
-        throw new Error(`Failed fetching room peers: ${txt}`);
+        throw new Error(
+          `Failed fetching room peers: ${txt}`,
+        );
       }
 
       const response = await res.json();
 
       console.log("fetched other peers");
 
-      // TODO : Currently we are seperating the client manually later implement auth and remove the client in the backend itself and get the clientId from the token 
+      // TODO : Currently we are seperating the user manually later implement auth and remove the user in the backend itself and get the userId from the token
       const peers = Array.isArray(response.otherPeers)
-        ? response.otherPeers.filter((peerId: string) => peerId !== clientId)
+        ? response.otherPeers.filter(
+            (peerId: string) => peerId !== userId,
+          )
         : [];
 
       setOtherPeers(peers);
     } catch (error) {
-      console.error("Error setting up RTC environment:", error);
+      console.error(
+        "Error setting up RTC environment:",
+        error,
+      );
 
       if (error instanceof Error) {
-        console.error("Error details:", error.message);
+        console.error(
+          "Error details:",
+          error.message,
+        );
       }
     }
   };
@@ -519,31 +697,58 @@ export default function WaitingPage() {
       try {
         await settingRTCEnvironment();
       } catch (error) {
-        console.log("Error setting up the RTC environment :", error);
+        console.log(
+          "Error setting up the RTC environment :",
+          error,
+        );
       }
     };
 
     void init();
+
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     window.addEventListener("pagehide", handleLeave);
+
     return () => {
-      window.removeEventListener("pagehide", handleLeave);
+      window.removeEventListener(
+        "pagehide",
+        handleLeave,
+      );
     };
+
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     return () => {
+      localStreamRef.current
+        ?.getTracks()
+        .forEach((track) => {
+          track.stop();
+        });
+
+      pcCleanup(pcRef.current);
+      pcCleanup(subscriberPcRef.current);
       wsCleanup();
+
+      pcRef.current = null;
+      subscriberPcRef.current = null;
+
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = null;
+      }
+
+      localStreamRef.current = null;
     };
   }, []);
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-slate-950 p-4 text-slate-100 sm:p-6 lg:p-8">
       <div className="pointer-events-none absolute -left-18 top-20 h-56 w-56 rounded-full border border-cyan-400/20" />
+
       <div className="pointer-events-none absolute -right-20 bottom-12 h-60 w-60 rounded-full border border-indigo-400/20" />
 
       <div className="relative mx-auto max-w-7xl space-y-6">
@@ -572,9 +777,9 @@ export default function WaitingPage() {
 
           <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-slate-700/70 pt-4">
             <div className="rounded-md border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs text-slate-300 sm:text-sm">
-              You:{" "}
+              You{" "}
               <span className="font-mono text-slate-100">
-                {shortId(clientId)}
+                {shortId(userId)}
               </span>
             </div>
 
@@ -602,7 +807,7 @@ export default function WaitingPage() {
             <div className="absolute inset-x-0 bottom-0 h-20 bg-linear-to-t from-black/70 to-transparent" />
 
             <div className="absolute bottom-3 left-3 rounded-md border border-cyan-300/40 bg-black/60 px-2.5 py-1 text-xs font-medium text-cyan-100">
-              You | {shortId(clientId)}
+              You | {shortId(userId)}
             </div>
           </div>
 
@@ -614,9 +819,18 @@ export default function WaitingPage() {
               <video
                 ref={(el) => {
                   remoteVideoRefs.current[peerId] = el;
+
+                  if (
+                    el &&
+                    remoteStreamsRef.current[peerId]
+                  ) {
+                    el.srcObject =
+                      remoteStreamsRef.current[peerId];
+                  }
                 }}
                 autoPlay
                 playsInline
+                muted={false}
                 className="h-64 w-full object-cover sm:h-72"
               />
 

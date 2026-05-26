@@ -10,14 +10,18 @@ import (
 
 // Use this client struct as later on we dont just need pc we would need userId, roomId etc a lot of things that is why use this struct.
 
-// TODO : Currently we get the userId from the frontend which is not okay even with auth implemented we need to generate the userId on the server side
+// TODO : Currently we generate the userId using UUID on each request which is not okay so implement auth and then we need to get the userId on the server side from the cookie/jwt.
 type Client struct {
-	UserId  string                 `json:"userId"`
-	RoomId  string                 `json:"roomId"`
-	Conn    *websocket.Conn        `json:"conn"`
-	PC      *webrtc.PeerConnection `json:"pc"`
-	SFUPeer *SFUPeer               `json:"peer"`
+	UserId         string                 `json:"userId"`
+	RoomId         string                 `json:"roomId"`
+	Conn           *websocket.Conn        `json:"conn"`
+	PC             *webrtc.PeerConnection `json:"pc"`
+	SFUPeer        *SFUPeer               `json:"peer"`
+	Subscriber     *Subscriber            `json:"subscriber"`
+	MidToPublisher map[string]string      `json:"midToPublisher"`
+	Closed         bool
 
+	Mu   sync.RWMutex
 	Send chan any
 }
 
@@ -26,6 +30,37 @@ type SFUPeer struct {
 	RemoteDescSet     bool
 	PendingCandidates []ICECandidateMessage
 	Mu                sync.RWMutex
+}
+
+type Subscriber struct {
+	PC                *webrtc.PeerConnection
+	RemoteDescSet     bool
+	PendingCandidates []ICECandidateMessage
+	VideoSlots        []*MediaSlot
+	AudioSlots        []*MediaSlot
+	Mu                sync.RWMutex
+}
+
+type MediaSlot struct {
+	Transceiver      *webrtc.RTPTransceiver
+	Occupied         bool
+	PublisherId      string
+	Kind             webrtc.RTPCodecType
+	DrainRTCPStarted bool
+	TrackID          string
+
+	Mu sync.RWMutex
+}
+
+type PublishedTrack struct {
+	PublisherID string
+	TrackID     string
+	StreamID    string
+	SSRC        webrtc.SSRC
+	Kind        webrtc.RTPCodecType
+	LocalTrack  *webrtc.TrackLocalStaticRTP
+
+	Mu sync.RWMutex
 }
 
 // Write pump is a function owned by the Client struct only

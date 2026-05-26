@@ -32,12 +32,13 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	defer conn.Close()
-
 	log.Println("[WS] Websocket connected successfully")
 
-	client := models.Client{
-		Conn: conn,
+	client := &models.Client{
+		Conn:           conn,
+		MidToPublisher: make(map[string]string),
+		// VideoSlots:     make([]*models.MediaSlot, 0, 256),
+		// AudioSlots:     make([]*models.MediaSlot, 0, 256),
 		Send: make(chan any, 256),
 	}
 	// log.Println("[WS] Client created succesfully")
@@ -48,7 +49,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 	//The backend must listen for the WS events continously so we run a infinite for loop.
 	for {
 
-		log.Println("[WS] Waiting for websocket message")
+		// log.Println("[WS] Waiting for websocket message")
 
 		//We get msgType, msg and the err but we are not handlng the msgType right now hence we put a _ for now
 		_, msg, err := conn.ReadMessage()
@@ -84,7 +85,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
-			wh.SFU.HandleOffer(signal, conn, &client)
+			wh.SFU.HandleOffer(signal, conn, client)
 
 			// log.Println("[WS] Finished SFU.HandleOffer")
 
@@ -98,7 +99,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
-			wh.SFU.HandleICECandidate(iceMessage, &client)
+			wh.SFU.HandleICECandidate(iceMessage, client)
 
 		case "populate-room":
 			// User creates or joins the room he/she is eventually entering the room so only one event to just add the roomId to the client struct
@@ -125,7 +126,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 
 			// Populate neccesary room maps and arrays.
 			room.Mu.Lock()
-			room.UserIdToClient[createRoomMessage.UserId] = &client
+			room.UserIdToClient[createRoomMessage.UserId] = client
 			room.Mu.Unlock()
 
 			// log.Println("[WS] roomId attached to the client successfully")
@@ -140,8 +141,32 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
+			// TODON : uncomment cleanup functions.
+			// wh.SFU.CleanupSFU(client)
 			//TODO : Handle cleanup here.
 			// wh.RoomHandler.LeaveRoom()
+
+		case "subscriber-answer":
+			var answerMsg models.SubscriberAnswerMessage
+
+			err := json.Unmarshal(msg, &answerMsg)
+			if err != nil {
+				log.Println("[WS] Error decoding subscriber-answer message:", err)
+				return
+			}
+
+			wh.SFU.HandleSubscriberAnswer(answerMsg, client)
+
+		case "subscriber-ice-candidate":
+			var subscriberIceMessage models.ICECandidateMessage
+
+			err := json.Unmarshal(msg, &subscriberIceMessage)
+			if err != nil {
+				log.Println("[WS] Error decoding subscriber-ice-candidate message:", err)
+				return
+			}
+
+			wh.SFU.HandleSubscriberIce(subscriberIceMessage, client)
 
 		default:
 			log.Println("[WS] Unknown message type received:", base.Type)
@@ -149,4 +174,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 
 		// log.Println("[WS] Finished processing current websocket message")
 	}
+
+	log.Println("[WS] Read loop ended")
+	// wh.SFU.CleanupSFU(client)
 }

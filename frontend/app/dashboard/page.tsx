@@ -4,10 +4,17 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 export default function Dashboard() {
-  const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
+  const BASE_URL =
+    process.env.NEXT_PUBLIC_BASE_URL ??
+    process.env.NEXT_PUBLIC_API_URL ??
+    "http://localhost:8080";
+
   const [roomID, setRoomID] = useState("");
   const [connecting, setConnecting] = useState(false);
-  const [connectingAction, setConnectingAction] = useState<"create" | "join" | null>(null);
+  const [connectingAction, setConnectingAction] = useState<
+    "create" | "join" | null
+  >(null);
+
   const router = useRouter();
 
   const handleCreateRoom = async () => {
@@ -24,11 +31,12 @@ export default function Dashboard() {
         },
       });
 
-      const { roomId, clientId } = await res.json();
-      console.log(roomId);
-      console.log(clientId);
+      const { roomId, userId } = await res.json();
 
-      router.push(`/waitingRoom?roomId=${roomId}&clientId=${clientId}`);
+      console.log(roomId);
+      console.log(userId);
+
+      router.push(`/waitingRoom?roomId=${roomId}&userId=${userId}`);
     } catch (error) {
       console.log("Error creating the room : ", error);
     } finally {
@@ -53,25 +61,28 @@ export default function Dashboard() {
       setConnectingAction("join");
 
       const res = await fetch(`${BASE_URL}/joinroom/${targetRoomId}`, {
-        method:"POST",
-        headers : {
-          "Content-Type" : "application/json",
-        }
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
       });
 
       if (!res.ok) {
         const errText = await res.text();
+
         throw new Error(errText || `Join failed with status ${res.status}`);
       }
 
       const data = await res.json();
+
       console.log(data);
 
-      const { roomId, clientId } = data;
-      console.log(roomId);
-      console.log(clientId);
+      const { roomId, userId } = data;
 
-      router.push(`/waitingRoom?roomId=${roomId}&clientId=${clientId}`);
+      console.log(roomId);
+      console.log(userId);
+
+      router.push(`/waitingRoom?roomId=${roomId}&userId=${userId}`);
     } catch (error) {
       console.log(`Error joining the room id=${targetRoomId}: `, error);
     } finally {
@@ -91,21 +102,26 @@ export default function Dashboard() {
             <div className="flex h-12 w-12 items-center justify-center rounded-md border border-slate-600 bg-slate-900 text-sm font-semibold text-cyan-300">
               D2C
             </div>
+
             <div>
               <h2 className="text-lg font-semibold">Call Dashboard</h2>
-              <p className="text-sm text-slate-300">Create or join a secure room</p>
+
+              <p className="text-sm text-slate-300">
+                Create or join a secure room
+              </p>
             </div>
           </div>
 
-          <button
-            className="rounded-md border border-slate-600 bg-slate-900 px-4 py-2 text-sm text-slate-100 transition hover:border-slate-500 hover:bg-slate-800"
-          >
+          <button className="rounded-md border border-slate-600 bg-slate-900 px-4 py-2 text-sm text-slate-100 transition hover:border-slate-500 hover:bg-slate-800">
             Guest Session
           </button>
         </header>
 
         <section>
-          <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Video Call Workspace</h1>
+          <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
+            Video Call Workspace
+          </h1>
+
           <p className="mt-2 text-sm text-slate-300 sm:text-base">
             Real-time audio and video communication with WebRTC.
           </p>
@@ -114,6 +130,7 @@ export default function Dashboard() {
         <section className="grid gap-6 md:grid-cols-2">
           <div className="group rounded-xl border border-slate-700 bg-slate-900/90 p-8 shadow-lg shadow-black/20 transition duration-300 hover:-translate-y-1 hover:border-cyan-400/50">
             <h2 className="text-2xl font-semibold">Create Room</h2>
+
             <p className="mt-2 text-sm text-slate-300">
               Start a new video call room and invite others to join.
             </p>
@@ -123,12 +140,15 @@ export default function Dashboard() {
               disabled={connecting}
               className="mt-6 w-full rounded-md border border-cyan-300/80 bg-cyan-400 px-6 py-3 text-sm font-bold text-slate-950 transition hover:scale-[1.01] hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {connecting && connectingAction === "create" ? "Connecting..." : "Create Room"}
+              {connecting && connectingAction === "create"
+                ? "Connecting..."
+                : "Create Room"}
             </button>
           </div>
 
           <div className="group rounded-xl border border-slate-700 bg-slate-900/90 p-8 shadow-lg shadow-black/20 transition duration-300 hover:-translate-y-1 hover:border-indigo-400/50">
             <h2 className="text-2xl font-semibold">Join Room</h2>
+
             <p className="mt-2 text-sm text-slate-300">
               Enter a room ID to join an existing call.
             </p>
@@ -149,7 +169,9 @@ export default function Dashboard() {
                 disabled={!roomID.trim() || connecting}
                 className="rounded-md border border-indigo-300/70 bg-indigo-400 px-6 py-3 text-sm font-bold text-slate-950 transition hover:scale-[1.01] hover:bg-indigo-300 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {connecting && connectingAction === "join" ? "Connecting..." : "Join"}
+                {connecting && connectingAction === "join"
+                  ? "Connecting..."
+                  : "Join"}
               </button>
             </div>
           </div>
