@@ -132,10 +132,10 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 			// log.Println("[WS] roomId attached to the client successfully")
 
 		case "peer-left":
-			var leaveRoomMessage models.LeaveRoomSuccessMessage
+			leaveRoomMessage := &models.LeaveRoomSuccessMessage{}
 
 			// Decode the ws message
-			err := json.Unmarshal(msg, &leaveRoomMessage)
+			err := json.Unmarshal(msg, leaveRoomMessage)
 			if err != nil {
 				log.Println("[WS] Error decoding join-room message:", err)
 				return
@@ -146,9 +146,9 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 			// wh.RoomHandler.LeaveRoom()
 
 		case "subscriber-answer":
-			var answerMsg models.SubscriberAnswerMessage
+			answerMsg := &models.SubscriberAnswerMessage{}
 
-			err := json.Unmarshal(msg, &answerMsg)
+			err := json.Unmarshal(msg, answerMsg)
 			if err != nil {
 				log.Println("[WS] Error decoding subscriber-answer message:", err)
 				return

@@ -201,9 +201,16 @@ func (s *SFU) PublishVideoStream(client *models.Client, publishedTrack *models.P
 		return
 	}
 
-	// I need to re define tranceivers and also re-negotiate.
+	log.Printf("[SFU][VIDEO] Creating new tranceivers and doing a re-negotiation as no free VIDEO slot found subscriber=%v publisher=%v trackID=%v", client.UserId, publishedTrack.PublisherID, publishedTrack.TrackID)
 
-	log.Printf("[SFU][VIDEO] No free VIDEO slot found subscriber=%v publisher=%v trackID=%v", client.UserId, publishedTrack.PublisherID, publishedTrack.TrackID)
+	// I need to re define 10 tranceivers for video and audio each.
+	err := s.CreateTranceivers(client)
+	if err != nil {
+		log.Printf("Existing transceivers are full error creating new ones : %w", err)
+	}
+
+	// Re-negotiate
+	s.RenegotiateSubscriberOffer(client)
 }
 
 func (s *SFU) PublishAudioStream(client *models.Client, publishedTrack *models.PublishedTrack) {

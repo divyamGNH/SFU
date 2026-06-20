@@ -32,12 +32,13 @@ type Publisher struct {
 }
 
 type Subscriber struct {
-	PC                *webrtc.PeerConnection
-	RemoteDescSet     bool
-	PendingCandidates []ICECandidateMessage
-	VideoSlots        []*MediaSlot
-	AudioSlots        []*MediaSlot
-	Mu                sync.RWMutex
+	PC                 *webrtc.PeerConnection
+	RemoteDescSet      bool
+	PendingCandidates  []ICECandidateMessage
+	PendingTransceiver []*webrtc.RTPTransceiver
+	VideoSlots         []*MediaSlot
+	AudioSlots         []*MediaSlot
+	Mu                 sync.RWMutex
 }
 
 type MediaSlot struct {

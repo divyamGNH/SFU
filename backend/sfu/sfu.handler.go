@@ -276,7 +276,7 @@ func (s *SFU) HandleICECandidate(candidate models.ICECandidateMessage, client *m
 	}
 }
 
-func (s *SFU) HandleSubscriberAnswer(answer models.SubscriberAnswerMessage, client *models.Client) {
+func (s *SFU) HandleSubscriberAnswer(answer *models.SubscriberAnswerMessage, client *models.Client) {
 	remoteSDP := answer.SDP
 
 	subscriberPc := client.Subscriber.PC
@@ -290,52 +290,12 @@ func (s *SFU) HandleSubscriberAnswer(answer models.SubscriberAnswerMessage, clie
 	client.Subscriber.RemoteDescSet = true
 	client.Subscriber.Mu.Unlock()
 
-	transceivers := subscriberPc.GetTransceivers()
-	log.Println("Got all the tranceivers")
+	// Get all the tranceivers.
+	s.SetTranceiversAsSlots(client)
 
-	// Put each transceiver in a slot after the negotiation as the Mids are not stable before that which can cause problems.
-	for _, t := range transceivers {
-
-		if t.Direction() != webrtc.RTPTransceiverDirectionSendonly {
-			continue
-		}
-
-		log.Println(
-			"TRANSCEIVER:",
-			t.Mid(),
-			t.Sender() != nil,
-			t.Direction(),
-			t.Kind(),
-		)
-
-		switch t.Kind() {
-
-		case webrtc.RTPCodecTypeVideo:
-			client.Subscriber.Mu.Lock()
-			client.Subscriber.VideoSlots = append(client.Subscriber.VideoSlots, &models.MediaSlot{
-				Transceiver: t,
-				Occupied:    false,
-				Kind:        webrtc.RTPCodecTypeVideo,
-			})
-			client.Subscriber.Mu.Unlock()
-			log.Println("Added one to the VS")
-
-		case webrtc.RTPCodecTypeAudio:
-			client.Subscriber.Mu.Lock()
-			client.Subscriber.AudioSlots = append(client.Subscriber.AudioSlots, &models.MediaSlot{
-				Transceiver: t,
-				Occupied:    false,
-				Kind:        webrtc.RTPCodecTypeAudio,
-			})
-			client.Subscriber.Mu.Unlock()
-			log.Println("Added one to the AS")
-		}
-	}
-
+	// Flush the ICE candidate queue as the remote desc is not set.
 	s.FlushSubscriberICECandidateQueue(client)
-
 	s.SendRemoteMediaToLocalPeer(client)
-
 }
 
 func (s *SFU) HandleSubscriberIce(iceMessage models.ICECandidateMessage, client *models.Client) {
@@ -396,7 +356,11 @@ func (s *SFU) SendSubscriberOffer(client *models.Client) {
 	client.Subscriber.PC = subscriberPc
 
 	// Pre define transceivers here. 10 for video and 10 for audio.
-	s.CreateTranceivers(subscriberPc)
+	err = s.CreateTranceivers(client)
+	if err != nil {
+		log.Println("Error creating tranceivers", err)
+		return
+	}
 
 	subscriberPc.OnICECandidate(func(candidate *webrtc.ICECandidate) {
 
@@ -452,4 +416,47 @@ func (s *SFU) SendSubscriberOffer(client *models.Client) {
 
 	// Send the ws message.
 	client.SafeSend(subscriberOfferMsg)
+}
+
+func (s *SFU) RenegotiateSubscriberOffer(client *models.Client) {
+	// Get the subscriber pc.
+	subscriberPc := client.Subscriber.PC
+
+	// Create the new Offer(SDP).
+	reoffer, err := subscriberPc.CreateOffer(nil)
+	if err != nil {
+		log.Printf("Error creating re negotiation offer : %w", err)
+		return
+	}
+
+	// Set local description.
+	err = subscriberPc.SetLocalDescription(reoffer)
+	if err != nil {
+		log.Printf("Error setting the renegotiated subscriber offer as local description")
+		return
+	}
+
+	// Create the ws message.
+	message := models.SubscriberOfferMessage{
+		Type: "subscriber-offer",
+		SDP:  reoffer,
+	}
+
+	// Send the ws event.
+	client.SafeSend(message)
+}
+
+func (s *SFU) RenegotiateSubscriberAnswer(answer *models.SubscriberAnswerMessage, client *models.Client) {
+	reanswer := answer.SDP
+	subscriberPc := client.Subscriber.PC
+
+	// Set the new answer as remote desc.
+	err := subscriberPc.SetRemoteDescription(reanswer)
+	if err != nil {
+		log.Printf("Error setting the renegotiated subscriber answer as remote description")
+		return
+	}
+
+	// Set the new transceivers as slots.
+	s.SetTranceiversAsSlots(client)
 }
