@@ -19,6 +19,7 @@ export type ClientToServerMessage =
   | PopulateRoomMessage
   | SubscriberAnswerMessage
   | SubscriberICEMessage
+  | PeerLeftMessage
   | IceCandidateMessage;
 
 export type AnswerMessage = {
@@ -48,6 +49,7 @@ export type PeerJoinedMessage = {
 
 export type PeerLeftMessage = {
   type: "peer-left";
+  roomId : string;
   userId: string;
 };
 

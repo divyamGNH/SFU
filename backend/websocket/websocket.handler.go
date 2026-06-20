@@ -131,8 +131,8 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 
 			// log.Println("[WS] roomId attached to the client successfully")
 
-		case "leave-room":
-			var leaveRoomMessage models.LeaveRoomMessage
+		case "peer-left":
+			var leaveRoomMessage models.LeaveRoomSuccessMessage
 
 			// Decode the ws message
 			err := json.Unmarshal(msg, &leaveRoomMessage)
@@ -141,8 +141,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			// TODON : uncomment cleanup functions.
-			// wh.SFU.CleanupSFU(client)
+			wh.SFU.CleanUpSFU(client)
 			//TODO : Handle cleanup here.
 			// wh.RoomHandler.LeaveRoom()
 

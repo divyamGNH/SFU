@@ -35,6 +35,30 @@ func NewRoomHandler() *RoomHandler {
 
 //Helper functions.
 
+func (rh *RoomHandler) WriteJSON(w http.ResponseWriter, message any, statusCode int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+
+	err := json.NewEncoder(w).Encode(message)
+
+	if err != nil {
+		log.Println("[JoinRoom] Error encoding error response:", err)
+	}
+}
+
+func (rh *RoomHandler) WriteError(w http.ResponseWriter, message string, statusCode int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+
+	err := json.NewEncoder(w).Encode(models.ErrorResponse{
+		Message: message,
+	})
+
+	if err != nil {
+		log.Println("[JoinRoom] Error encoding error response:", err)
+	}
+}
+
 // Generate a unique roomId and return it as well.
 func (rh *RoomHandler) RoomIdGenerator() string {
 	return uuid.NewString()
@@ -120,7 +144,7 @@ func (rh *RoomHandler) ViewRoom(w http.ResponseWriter, r *http.Request) {
 	room, ok := rh.GetRoom(roomId)
 	if !ok {
 		log.Println("[RoomH] Error while getting other peers from a room")
-		http.Error(w, "Room not found", http.StatusNotFound)
+		rh.WriteError(w, "Room not found", http.StatusNotFound)
 		return
 	}
 
@@ -139,22 +163,17 @@ func (rh *RoomHandler) ViewRoom(w http.ResponseWriter, r *http.Request) {
 		log.Println(userId)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-
 	response := models.ViewRoomResponse{
 		OtherPeers: otherPeers,
 	}
 
-	json.NewEncoder(w).Encode(response)
+	rh.WriteJSON(w, response, http.StatusOK)
 }
-
-// IMPTODO : A huge mistake here the frontend is completely dependent on the backend to send the userId/clientId and the backend expects the frontend to send it so fix that architectural issue.
 
 func (rh *RoomHandler) CreateRoom(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		rh.WriteError(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -180,35 +199,18 @@ func (rh *RoomHandler) CreateRoom(w http.ResponseWriter, r *http.Request) {
 	room.UserIds = append(room.UserIds, clientId)
 	room.Mu.Unlock()
 
-	response := models.CreateRoomSuccessMessage{
+	response := models.CreateRoomResponse{
 		RoomId: roomId,
 		UserId: clientId,
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-
-	err := json.NewEncoder(w).Encode(response)
-	if err != nil {
-		log.Println("[CreateRoom] Error encoding response:", err)
-		return
-	}
+	rh.WriteJSON(w, response, http.StatusCreated)
 }
 
 func (rh *RoomHandler) JoinRoom(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method != http.MethodPost {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusMethodNotAllowed)
-
-		err := json.NewEncoder(w).Encode(models.ErrorResponse{
-			Message: "Method not allowed",
-		})
-
-		if err != nil {
-			log.Println("[JoinRoom] Error encoding response:", err)
-		}
-
+		rh.WriteError(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -220,16 +222,7 @@ func (rh *RoomHandler) JoinRoom(w http.ResponseWriter, r *http.Request) {
 
 	if roomId == "" {
 
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-
-		err := json.NewEncoder(w).Encode(models.ErrorResponse{
-			Message: "roomId is required",
-		})
-
-		if err != nil {
-			log.Println("[JoinRoom] Error encoding response:", err)
-		}
+		rh.WriteError(w, "roomId is required", http.StatusBadRequest)
 
 		return
 	}
@@ -238,40 +231,24 @@ func (rh *RoomHandler) JoinRoom(w http.ResponseWriter, r *http.Request) {
 	room, ok := rh.GetRoom(roomId)
 	if !ok {
 
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-
-		err := json.NewEncoder(w).Encode(models.ErrorResponse{
-			Message: "No such room with this roomId exists",
-		})
-
-		if err != nil {
-			log.Println("[JoinRoom] Error encoding response:", err)
-		}
+		rh.WriteError(w, "No such room with this roomId exists", http.StatusNotFound)
 
 		return
 	}
 
 	room.Mu.Lock()
 
-	_, exists := room.UserIdToClient[clientId]
+	// The clientId was generated 5  lines earlier it will never be duplicate.
 
-	if exists {
-		room.Mu.Unlock()
+	// _, exists := room.UserIdToClient[clientId]
 
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
+	// if exists {
+	// 	room.Mu.Unlock()
 
-		err := json.NewEncoder(w).Encode(models.ErrorResponse{
-			Message: "User with userId already exists",
-		})
+	// 	rh.WriteError(w, "User with userId already exists", http.StatusBadRequest)
 
-		if err != nil {
-			log.Println("[JoinRoom] Error encoding response:", err)
-		}
-
-		return
-	}
+	// 	return
+	// }
 
 	// User joins logically here
 	room.UserIds = append(room.UserIds, clientId)
@@ -309,34 +286,15 @@ func (rh *RoomHandler) JoinRoom(w http.ResponseWriter, r *http.Request) {
 		UserId: clientId,
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-
-	err := json.NewEncoder(w).Encode(successMsg)
-
-	if err != nil {
-		log.Println("[JoinRoom] Error encoding response:", err)
-		return
-	}
+	rh.WriteJSON(w, successMsg, http.StatusOK)
 }
 
-// triggers on listening to "leaveroom" event
 func (rh *RoomHandler) LeaveRoom(w http.ResponseWriter, r *http.Request) {
 
 	// Ensure the method is POST method only.
 	// Once we connect to the DB we need to make this POST to DELETE
 	if r.Method != http.MethodPost {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusMethodNotAllowed)
-
-		err := json.NewEncoder(w).Encode(models.ErrorResponse{
-			Message: "Method not allowed",
-		})
-
-		if err != nil {
-			log.Println("[LeaveRoom] Error encoding response:", err)
-		}
-
+		rh.WriteError(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -348,21 +306,29 @@ func (rh *RoomHandler) LeaveRoom(w http.ResponseWriter, r *http.Request) {
 	//Check if the room even exists or not
 	room, ok := rh.GetRoom(roomId)
 	if !ok {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-
-		err := json.NewEncoder(w).Encode(models.ErrorResponse{
-			Message: "No such room with this roomId exists",
-		})
-
-		if err != nil {
-			log.Println("[LeaveRoom] Error encoding response:", err)
-		}
+		rh.WriteError(w, "No such room with this roomId exists", http.StatusNotFound)
 		return
 	}
 
 	//delete the client from the room
 	room.Mu.Lock()
+
+	// Check if the userId sent by the frontend actually exists before cleaning this up.
+	found := false
+	for _, id := range room.UserIds {
+		if id == userId {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		room.Mu.Unlock()
+
+		rh.WriteError(w, "User is not a member of this room", http.StatusNotFound)
+		return
+	}
+
 	delete(room.UserIdToClient, userId)
 
 	for i, id := range room.UserIds {
@@ -373,6 +339,10 @@ func (rh *RoomHandler) LeaveRoom(w http.ResponseWriter, r *http.Request) {
 	}
 
 	room.Mu.Unlock()
+
+	rh.Mu.Lock()
+	delete(rh.UserIdToRoomId, userId)
+	rh.Mu.Unlock()
 
 	rh.CleanRoom(roomId)
 
@@ -402,19 +372,10 @@ func (rh *RoomHandler) LeaveRoom(w http.ResponseWriter, r *http.Request) {
 		Message: "Left room successfully",
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-
-	err := json.NewEncoder(w).Encode(successMsg)
-
-	if err != nil {
-		log.Println("[LeaveRoom] Error encoding response:", err)
-		return
-	}
+	rh.WriteJSON(w, successMsg, http.StatusOK)
 }
 
 // Handle all the cleanup
-// TODO : Implement this also keep in mind to make this either http based route or a helper function.
 func (rh *RoomHandler) CleanRoom(roomId string) {
 	//first check if the room has any users left or not
 	room, ok := rh.GetRoom(roomId)
@@ -424,7 +385,7 @@ func (rh *RoomHandler) CleanRoom(roomId string) {
 	}
 
 	room.Mu.RLock()
-	isEmpty := len(room.UserIdToClient) == 0
+	isEmpty := len(room.UserIds) == 0
 	room.Mu.RUnlock()
 
 	if !isEmpty {
@@ -437,5 +398,4 @@ func (rh *RoomHandler) CleanRoom(roomId string) {
 	rh.Mu.Unlock()
 
 	log.Printf("[Room] Room with roomid : %v has been deleted", roomId)
-
 }

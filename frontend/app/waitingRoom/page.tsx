@@ -4,9 +4,11 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useState, useRef, useEffect } from "react";
 import type {
   ClientToServerMessage,
+  PeerLeftMessage,
   ServerToClientMessage,
   SubscriberAnswerMessage,
 } from "@/types/wsMessageTypes";
+import { ErrorResponse, LeaveRoomResponse, ViewRoomResponse } from "@/types/httpMessageTypes";
 
 export default function WaitingPage() {
   const BASE_URL =
@@ -26,23 +28,17 @@ export default function WaitingPage() {
   const [otherPeers, setOtherPeers] = useState<string[]>([]);
 
   const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
-  const pendingSubscriberIceCandidatesRef = useRef<
-    RTCIceCandidateInit[]
-  >([]);
+  const pendingSubscriberIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
 
   const pendingTracksRef = useRef<Record<string, RTCTrackEvent[]>>({});
 
-  const remoteVideoRefs = useRef<
-    Record<string, HTMLVideoElement | null>
-  >({});
+  const remoteVideoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
 
   const remoteStreamsRef = useRef<Record<string, MediaStream>>({});
 
   const hasInitializedRef = useRef<boolean>(false);
 
-  const midToPublisherRef = useRef<
-    Record<string, string | null>
-  >({});
+  const midToPublisherRef = useRef<Record<string, string | null>>({});
 
   const searchParams = useSearchParams();
 
@@ -139,14 +135,13 @@ export default function WaitingPage() {
       },
     ];
 
+    // TODO : Add TURN servers but they need auth so need to add that first.
     return fallbackServers;
   }
 
   // Remove the peer that left from the room states.
   const removePeer = (leftUserId: string) => {
-    setOtherPeers((prev) =>
-      prev.filter((peerId) => peerId !== leftUserId),
-    );
+    setOtherPeers((prev) => prev.filter((peerId) => peerId !== leftUserId));
 
     delete remoteVideoRefs.current[leftUserId];
     delete remoteStreamsRef.current[leftUserId];
@@ -155,6 +150,7 @@ export default function WaitingPage() {
   // handle the leave button or a unexpected leave of the user from the call.
   async function handleLeave() {
     if (!userId) return;
+    if (!roomId) return;
 
     const res = await fetch(
       `http://localhost:8080/leaveroom/${roomId}/${userId}`,
@@ -166,11 +162,21 @@ export default function WaitingPage() {
       },
     );
 
-    // TODO : Handle support to handle all the status codes.
-    if (res.status != 200) {
-      console.log("Error leaving room");
+    if (!res.ok) {
+      const err: ErrorResponse = await res.json();
+      console.log(
+        `Error leaving room : Status code ${res.status} ${err.message}`,
+      );
       return;
     }
+
+    const msg : PeerLeftMessage = {
+      type : "peer-left",
+      roomId : roomId,
+      userId : userId,
+    }
+
+    sendMessage(msg)
 
     // Stop all the local tracks majorly clients own audio and video.
     localStreamRef.current?.getTracks().forEach((track) => {
@@ -200,9 +206,7 @@ export default function WaitingPage() {
   // Create short ids for UI purposes.
   const shortId = (id: string | null) => {
     if (!id) {
-      console.log(
-        "A unknown userId probably null value has appeared.",
-      );
+      console.log("A unknown userId probably null value has appeared.");
 
       return "unknown";
     }
@@ -290,9 +294,7 @@ export default function WaitingPage() {
       // Publisher PC does not need tracks.
 
       pc.oniceconnectionstatechange = () => {
-        console.log(
-          `ICE connection state change: ${pc.iceConnectionState}`,
-        );
+        console.log(`ICE connection state change: ${pc.iceConnectionState}`);
       };
 
       pc.onconnectionstatechange = () => {
@@ -307,20 +309,14 @@ export default function WaitingPage() {
     } catch (error) {
       console.log(error);
 
-      throw new Error(
-        "Error in creating the Peer Connection",
-        {
-          cause: error,
-        },
-      );
+      throw new Error("Error in creating the Peer Connection", {
+        cause: error,
+      });
     }
   }
 
   // Attach tracks to the correct peer stream and UI.
-  function attachTrackToPeer(
-    publisherId: string,
-    track: MediaStreamTrack,
-  ) {
+  function attachTrackToPeer(publisherId: string, track: MediaStreamTrack) {
     let stream = remoteStreamsRef.current[publisherId];
 
     if (!stream) {
@@ -328,9 +324,7 @@ export default function WaitingPage() {
       remoteStreamsRef.current[publisherId] = stream;
     }
 
-    const alreadyExists = stream
-      .getTracks()
-      .some((t) => t.id === track.id);
+    const alreadyExists = stream.getTracks().some((t) => t.id === track.id);
 
     if (!alreadyExists) {
       stream.addTrack(track);
@@ -348,9 +342,7 @@ export default function WaitingPage() {
     console.log("called setUpWebsocketListeners");
 
     ws.onmessage = async (event) => {
-      const message: ServerToClientMessage = JSON.parse(
-        event.data,
-      );
+      const message: ServerToClientMessage = JSON.parse(event.data);
 
       switch (message.type) {
         case "answer":
@@ -362,10 +354,7 @@ export default function WaitingPage() {
 
           await pc.setRemoteDescription(message.sdp);
 
-          await flushPendingIceCandidates(
-            pc,
-            pendingIceCandidatesRef.current,
-          );
+          await flushPendingIceCandidates(pc, pendingIceCandidatesRef.current);
 
           break;
 
@@ -387,9 +376,7 @@ export default function WaitingPage() {
 
           if (message.userId !== userId) {
             setOtherPeers((prev) =>
-              prev.includes(message.userId)
-                ? prev
-                : [...prev, message.userId],
+              prev.includes(message.userId) ? prev : [...prev, message.userId],
             );
           }
 
@@ -424,8 +411,7 @@ export default function WaitingPage() {
               return;
             }
 
-            const publisherId =
-              midToPublisherRef.current[mid];
+            const publisherId = midToPublisherRef.current[mid];
 
             // Queue track if publisher metadata not arrived yet
             if (!publisherId) {
@@ -442,9 +428,7 @@ export default function WaitingPage() {
 
             attachTrackToPeer(publisherId, track);
 
-            console.log(
-              `Attached ${track.kind} track for ${publisherId}`,
-            );
+            console.log(`Attached ${track.kind} track for ${publisherId}`);
           };
 
           subscriberPc.onicecandidate = (event) => {
@@ -469,20 +453,16 @@ export default function WaitingPage() {
           };
 
           // Set remoteDesc
-          await subscriberPc.setRemoteDescription(
-            message.sdp,
-          );
+          await subscriberPc.setRemoteDescription(message.sdp);
 
-          const answer =
-            await subscriberPc.createAnswer();
+          const answer = await subscriberPc.createAnswer();
 
           await subscriberPc.setLocalDescription(answer);
 
-          const subscriberAnswerMsg: SubscriberAnswerMessage =
-            {
-              type: "subscriber-answer",
-              sdp: answer,
-            };
+          const subscriberAnswerMsg: SubscriberAnswerMessage = {
+            type: "subscriber-answer",
+            sdp: answer,
+          };
 
           sendMessage(subscriberAnswerMsg);
 
@@ -498,10 +478,7 @@ export default function WaitingPage() {
 
           //create a queue
           //check if the remote desc is set if yes add them here else push to the queue
-          if (
-            message.iceCandidate &&
-            subscriberPcRef.current
-          ) {
+          if (message.iceCandidate && subscriberPcRef.current) {
             await queueOrAddIceCandidate(
               subscriberPcRef.current,
               message.iceCandidate,
@@ -512,10 +489,7 @@ export default function WaitingPage() {
           break;
 
         case "media-published":
-          console.log(
-            "Received media metadata",
-            message,
-          );
+          console.log("Received media metadata", message);
 
           const mid = message.mid;
           const publisher = message.publisher;
@@ -523,15 +497,11 @@ export default function WaitingPage() {
           midToPublisherRef.current[mid] = publisher;
 
           // Flush queued tracks for this MID
-          const pendingEvents =
-            pendingTracksRef.current[mid];
+          const pendingEvents = pendingTracksRef.current[mid];
 
           if (pendingEvents) {
             for (const event of pendingEvents) {
-              attachTrackToPeer(
-                publisher,
-                event.track,
-              );
+              attachTrackToPeer(publisher, event.track);
             }
 
             delete pendingTracksRef.current[mid];
@@ -540,10 +510,7 @@ export default function WaitingPage() {
           break;
 
         default:
-          console.log(
-            "Unknown websocket message:",
-            message,
-          );
+          console.log("Unknown websocket message:", message);
       }
     };
   }
@@ -553,9 +520,7 @@ export default function WaitingPage() {
     try {
       // Validate required parameters
       if (!roomId || !userId) {
-        console.error(
-          "Missing roomId or userId from URL params",
-        );
+        console.error("Missing roomId or userId from URL params");
 
         throw new Error(
           `Invalid URL params: roomId=${roomId}, userId=${userId}`,
@@ -569,8 +534,7 @@ export default function WaitingPage() {
 
       if (
         wsRef.current &&
-        (wsRef.current.readyState ===
-          WebSocket.CONNECTING ||
+        (wsRef.current.readyState === WebSocket.CONNECTING ||
           wsRef.current.readyState === WebSocket.OPEN)
       ) {
         console.log("WebSocket already exists");
@@ -591,10 +555,7 @@ export default function WaitingPage() {
         console.error("WebSocket error:", event);
 
         // Check if connection was refused from the backend.
-        if (
-          event instanceof Event &&
-          event.type === "error"
-        ) {
+        if (event instanceof Event && event.type === "error") {
           console.error(
             `Failed to connect to WebSocket. Make sure backend is running on ${BASE_URL}`,
           );
@@ -622,9 +583,7 @@ export default function WaitingPage() {
           userId: userId,
         });
 
-        console.log(
-          "WebSocket connected successfully",
-        );
+        console.log("WebSocket connected successfully");
 
         const pc = await createPeerConnection();
 
@@ -643,47 +602,34 @@ export default function WaitingPage() {
 
       console.log("fetching other peers");
 
-      const res = await fetch(
-        `${BASE_URL}/viewroom/${roomId}`,
-        {
-          method: "GET",
-          headers: {
-            "Content-Type": "application/json",
-          },
+      const res = await fetch(`${BASE_URL}/viewroom/${roomId}`, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
         },
-      );
+      });
 
       if (!res.ok) {
-        const txt = await res.text();
+        const err: ErrorResponse = await res.json();
 
-        throw new Error(
-          `Failed fetching room peers: ${txt}`,
-        );
+        throw new Error(`Failed fetching room peers: ${err.message}`);
       }
-
-      const response = await res.json();
 
       console.log("fetched other peers");
 
+      const response: ViewRoomResponse = await res.json();
+
       // TODO : Currently we are seperating the user manually later implement auth and remove the user in the backend itself and get the userId from the token
       const peers = Array.isArray(response.otherPeers)
-        ? response.otherPeers.filter(
-            (peerId: string) => peerId !== userId,
-          )
+        ? response.otherPeers.filter((peerId: string) => peerId !== userId)
         : [];
 
       setOtherPeers(peers);
     } catch (error) {
-      console.error(
-        "Error setting up RTC environment:",
-        error,
-      );
+      console.error("Error setting up RTC environment:", error);
 
       if (error instanceof Error) {
-        console.error(
-          "Error details:",
-          error.message,
-        );
+        console.error("Error details:", error.message);
       }
     }
   };
@@ -697,10 +643,7 @@ export default function WaitingPage() {
       try {
         await settingRTCEnvironment();
       } catch (error) {
-        console.log(
-          "Error setting up the RTC environment :",
-          error,
-        );
+        console.log("Error setting up the RTC environment :", error);
       }
     };
 
@@ -713,10 +656,7 @@ export default function WaitingPage() {
     window.addEventListener("pagehide", handleLeave);
 
     return () => {
-      window.removeEventListener(
-        "pagehide",
-        handleLeave,
-      );
+      window.removeEventListener("pagehide", handleLeave);
     };
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -724,11 +664,9 @@ export default function WaitingPage() {
 
   useEffect(() => {
     return () => {
-      localStreamRef.current
-        ?.getTracks()
-        .forEach((track) => {
-          track.stop();
-        });
+      localStreamRef.current?.getTracks().forEach((track) => {
+        track.stop();
+      });
 
       pcCleanup(pcRef.current);
       pcCleanup(subscriberPcRef.current);
@@ -820,12 +758,8 @@ export default function WaitingPage() {
                 ref={(el) => {
                   remoteVideoRefs.current[peerId] = el;
 
-                  if (
-                    el &&
-                    remoteStreamsRef.current[peerId]
-                  ) {
-                    el.srcObject =
-                      remoteStreamsRef.current[peerId];
+                  if (el && remoteStreamsRef.current[peerId]) {
+                    el.srcObject = remoteStreamsRef.current[peerId];
                   }
                 }}
                 autoPlay
