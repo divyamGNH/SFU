@@ -170,10 +170,10 @@ export default function WaitingPage() {
       return;
     }
 
-    const msg : PeerLeftMessage = {
-      type : "peer-left",
-      roomId : roomId,
-      userId : userId,
+    const msg: PeerLeftMessage = {
+      type: "peer-left",
+      roomId: roomId,
+      userId: userId,
     }
 
     sendMessage(msg)
@@ -317,6 +317,14 @@ export default function WaitingPage() {
 
   // Attach tracks to the correct peer stream and UI.
   function attachTrackToPeer(publisherId: string, track: MediaStreamTrack) {
+    console.log(
+      "ATTACHING",
+      publisherId,
+      track.kind,
+      track.id,
+      track.readyState
+    );
+
     let stream = remoteStreamsRef.current[publisherId];
 
     if (!stream) {
@@ -334,6 +342,20 @@ export default function WaitingPage() {
 
     if (videoEl && videoEl.srcObject !== stream) {
       videoEl.srcObject = stream;
+
+      videoEl.play()
+        .then(() => console.log("PLAY OK"))
+        .catch(err => console.log("PLAY ERR", err));
+
+      console.log(
+        "VIDEO ELEMENT",
+        publisherId,
+        videoEl?.muted,
+        videoEl?.volume,
+        videoEl?.paused,
+        stream.getAudioTracks().length,
+        stream.getVideoTracks().length
+      );
     }
   }
 
@@ -403,6 +425,13 @@ export default function WaitingPage() {
           subscriberPcRef.current = subscriberPc;
 
           subscriberPc.ontrack = (event) => {
+            console.log(
+              "TRACK RECEIVED",
+              event.track.kind,
+              event.track.id,
+              event.transceiver.mid
+            );
+
             const track = event.track;
             const mid = event.transceiver.mid;
 
@@ -450,6 +479,26 @@ export default function WaitingPage() {
             console.log(
               `Subscriber Connection state: ${subscriberPc.connectionState} | Subscriber ICE state: ${subscriberPc.iceConnectionState}`,
             );
+
+            if (subscriberPc.connectionState === "connected") {
+              setInterval(async () => {
+                const stats = await subscriberPc.getStats();
+
+                stats.forEach((report) => {
+                  if (
+                    report.type === "inbound-rtp" &&
+                    report.kind === "audio"
+                  ) {
+                    console.log(
+                      "AUDIO RTP",
+                      report.mid,
+                      report.packetsReceived,
+                      report.bytesReceived
+                    );
+                  }
+                });
+              }, 2000);
+            }
           };
 
           // Set remoteDesc

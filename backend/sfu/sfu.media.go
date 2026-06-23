@@ -109,21 +109,7 @@ func IsTrackAlreadyPublished(slots []*models.MediaSlot, publishedTrack *models.P
 }
 
 // Send media to a single client specified in the function.
-func (s *SFU) PublishVideoStream(client *models.Client, publishedTrack *models.PublishedTrack) {
-	if client.Subscriber == nil {
-		log.Printf("[SFU] Subscriber PC for videoTrack is nil subscriber=%v", client.UserId)
-		return
-	}
-
-	if !client.Subscriber.RemoteDescSet {
-		log.Printf("[SFU] Remote description not set subscriber=%v", client.UserId)
-		return
-	}
-
-	if IsTrackAlreadyPublished(client.Subscriber.VideoSlots, publishedTrack) {
-		log.Printf("[SFU] Track already published subscriber=%v publisher=%v trackID=%v", client.UserId, publishedTrack.PublisherID, publishedTrack.TrackID)
-		return
-	}
+func (s *SFU) PublishVideoStream(client *models.Client, publishedTrack *models.PublishedTrack) bool {
 
 	// Search for free slots.
 	for index, slot := range client.Subscriber.VideoSlots {
@@ -198,37 +184,15 @@ func (s *SFU) PublishVideoStream(client *models.Client, publishedTrack *models.P
 
 		// Send the WS msg.
 		client.SafeSend(msg)
-		return
+		return false
 	}
 
 	log.Printf("[SFU][VIDEO] Creating new tranceivers and doing a re-negotiation as no free VIDEO slot found subscriber=%v publisher=%v trackID=%v", client.UserId, publishedTrack.PublisherID, publishedTrack.TrackID)
 
-	// I need to re define 10 tranceivers for video and audio each.
-	err := s.CreateTranceivers(client)
-	if err != nil {
-		log.Printf("Existing transceivers are full error creating new ones : %w", err)
-	}
-
-	// Re-negotiate
-	s.RenegotiateSubscriberOffer(client)
+	return true
 }
 
-func (s *SFU) PublishAudioStream(client *models.Client, publishedTrack *models.PublishedTrack) {
-
-	if client.Subscriber == nil {
-		log.Printf("[SFU][AUDIO] Subscriber PC is nil subscriber=%v", client.UserId)
-		return
-	}
-
-	if !client.Subscriber.RemoteDescSet {
-		log.Printf("[SFU][AUDIO] Remote description not set subscriber=%v", client.UserId)
-		return
-	}
-
-	if IsTrackAlreadyPublished(client.Subscriber.AudioSlots, publishedTrack) {
-		log.Printf("[SFU][AUDIO] Track already published subscriber=%v publisher=%v trackID=%v", client.UserId, publishedTrack.PublisherID, publishedTrack.TrackID)
-		return
-	}
+func (s *SFU) PublishAudioStream(client *models.Client, publishedTrack *models.PublishedTrack) bool {
 
 	log.Printf("[SFU][AUDIO] Searching for free slot subscriber=%v totalSlots=%d", client.UserId, len(client.Subscriber.AudioSlots))
 
@@ -304,10 +268,12 @@ func (s *SFU) PublishAudioStream(client *models.Client, publishedTrack *models.P
 
 		// Send the WS message.
 		client.SafeSend(msg)
-		return
+		return false
 	}
 
 	log.Printf("[SFU][AUDIO] No free AUDIO slot found subscriber=%v publisher=%v trackID=%v", client.UserId, publishedTrack.PublisherID, publishedTrack.TrackID)
+
+	return true
 }
 
 func (s *SFU) SendLocalMediaToRemotePeers(client *models.Client) {
@@ -340,6 +306,18 @@ func (s *SFU) SendRemoteMediaToLocalPeer(client *models.Client) {
 		return
 	}
 
+	if client.Subscriber == nil {
+		log.Printf("[SFU] Subscriber PC for videoTrack is nil subscriber=%v", client.UserId)
+		return
+	}
+
+	if !client.Subscriber.RemoteDescSet {
+		log.Printf("[SFU][AUDIO] Remote description not set subscriber=%v", client.UserId)
+		return
+	}
+
+	needNegotiation := false
+
 	for _, peer := range otherPeers {
 		tracks := s.UserIdToPublishedTracks[peer.UserId]
 
@@ -348,11 +326,31 @@ func (s *SFU) SendRemoteMediaToLocalPeer(client *models.Client) {
 			switch publishedTrack.Kind {
 
 			case webrtc.RTPCodecTypeVideo:
-				s.PublishVideoStream(client, publishedTrack)
+				if IsTrackAlreadyPublished(client.Subscriber.VideoSlots, publishedTrack) {
+					log.Printf("[SFU] Track already published subscriber=%v publisher=%v trackID=%v", client.UserId, publishedTrack.PublisherID, publishedTrack.TrackID)
+					continue
+				}
+				needNegotiation = needNegotiation || s.PublishVideoStream(client, publishedTrack)
 
 			case webrtc.RTPCodecTypeAudio:
-				s.PublishAudioStream(client, publishedTrack)
+				if IsTrackAlreadyPublished(client.Subscriber.AudioSlots, publishedTrack) {
+					log.Printf("[SFU][AUDIO] Track already published subscriber=%v publisher=%v trackID=%v", client.UserId, publishedTrack.PublisherID, publishedTrack.TrackID)
+					continue
+				}
+				needNegotiation = needNegotiation || s.PublishAudioStream(client, publishedTrack)
 			}
 		}
+	}
+
+	// Any of the video or audio failed to get a slot so basically we assign new transceivers for both of them
+	if needNegotiation {
+		// I need to re define 10 tranceivers for video and audio each.
+		err := s.CreateTranceivers(client)
+		if err != nil {
+			log.Printf("Existing transceivers are full error creating new ones : %s", err)
+		}
+
+		// Re-negotiate
+		s.RenegotiateSubscriberOffer(client)
 	}
 }
