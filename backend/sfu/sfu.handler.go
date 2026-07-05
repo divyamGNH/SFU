@@ -277,6 +277,10 @@ func (s *SFU) HandleICECandidate(candidate models.ICECandidateMessage, client *m
 }
 
 func (s *SFU) HandleSubscriberAnswer(answer *models.SubscriberAnswerMessage, client *models.Client) {
+	log.Printf(
+		"Subscriber answer from %s",
+		client.UserId,
+	)
 	remoteSDP := answer.SDP
 
 	subscriberPc := client.Subscriber.PC
@@ -419,22 +423,29 @@ func (s *SFU) SendSubscriberOffer(client *models.Client) {
 }
 
 func (s *SFU) RenegotiateSubscriberOffer(client *models.Client) {
+	log.Printf(
+		"Sending subscriber offer to %s",
+		client.UserId,
+	)
+
 	// Get the subscriber pc.
 	subscriberPc := client.Subscriber.PC
 
 	// Create the new Offer(SDP).
 	reoffer, err := subscriberPc.CreateOffer(nil)
 	if err != nil {
-		log.Printf("Error creating re negotiation offer : %w", err)
+		log.Printf("Error creating re negotiation offer : %s", err)
 		return
 	}
+	log.Printf("re-offer SDP created succesfully")
 
 	// Set local description.
 	err = subscriberPc.SetLocalDescription(reoffer)
 	if err != nil {
-		log.Printf("Error setting the renegotiated subscriber offer as local description")
+		log.Printf("Error setting the renegotiated subscriber offer as local description : %s", err)
 		return
 	}
+	log.Printf("local desc set succesfully for re nego")
 
 	// Create the ws message.
 	message := models.SubscriberOfferMessage{
@@ -442,8 +453,10 @@ func (s *SFU) RenegotiateSubscriberOffer(client *models.Client) {
 		SDP:  reoffer,
 	}
 
+	log.Printf("subscriber-offer message being sent")
 	// Send the ws event.
 	client.SafeSend(message)
+	log.Printf("subscriber-offer message being sent done")
 }
 
 func (s *SFU) RenegotiateSubscriberAnswer(answer *models.SubscriberAnswerMessage, client *models.Client) {
@@ -453,7 +466,7 @@ func (s *SFU) RenegotiateSubscriberAnswer(answer *models.SubscriberAnswerMessage
 	// Set the new answer as remote desc.
 	err := subscriberPc.SetRemoteDescription(reanswer)
 	if err != nil {
-		log.Printf("Error setting the renegotiated subscriber answer as remote description")
+		log.Printf("Error setting the renegotiated subscriber answer as remote description : %s", err)
 		return
 	}
 

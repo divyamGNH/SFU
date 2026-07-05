@@ -187,7 +187,7 @@ func (s *SFU) PublishVideoStream(client *models.Client, publishedTrack *models.P
 		return false
 	}
 
-	log.Printf("[SFU][VIDEO] Creating new tranceivers and doing a re-negotiation as no free VIDEO slot found subscriber=%v publisher=%v trackID=%v", client.UserId, publishedTrack.PublisherID, publishedTrack.TrackID)
+	log.Printf("[SFU][VIDEO] No free VIDEO slot found subscriber=%v publisher=%v trackID=%v", client.UserId, publishedTrack.PublisherID, publishedTrack.TrackID)
 
 	return true
 }
@@ -287,14 +287,36 @@ func (s *SFU) SendLocalMediaToRemotePeers(client *models.Client) {
 	localTracks := append([]*models.PublishedTrack(nil), s.UserIdToPublishedTracks[client.UserId]...)
 	s.mu.RUnlock()
 	for _, peer := range otherPeers {
+		needNegotiation := false
+
 		for _, localtrack := range localTracks {
 			switch localtrack.Kind {
 			case webrtc.RTPCodecTypeVideo:
-				s.PublishVideoStream(peer, localtrack)
+				needNegotiation = needNegotiation || s.PublishVideoStream(peer, localtrack)
 
 			case webrtc.RTPCodecTypeAudio:
-				s.PublishAudioStream(peer, localtrack)
+				needNegotiation = needNegotiation || s.PublishAudioStream(peer, localtrack)
 			}
+		}
+
+		log.Printf("Negotiation needed or not status is : %t", needNegotiation)
+		// Any of the video or audio failed to get a slot so basically we assign new transceivers for both of them
+		if needNegotiation {
+			// I need to re define 10 tranceivers for video and audio each.
+			log.Printf("[SFU] No free AUDIO or VIDEO slot found. Creating more tranceivers")
+
+			err := s.CreateTranceivers(peer)
+			if err != nil {
+				log.Printf("Existing transceivers are full error creating new ones : %s", err)
+			}
+
+			// Re-negotiate
+			log.Printf("Renegotiating the new transceivers %s", peer.UserId)
+
+			// Do re-negotitation for all the users in the room
+			s.RenegotiateSubscriberOffer(peer)
+
+			needNegotiation = false
 		}
 	}
 }
@@ -342,15 +364,23 @@ func (s *SFU) SendRemoteMediaToLocalPeer(client *models.Client) {
 		}
 	}
 
+	log.Printf("Negotiation needed or not status is : %t", needNegotiation)
 	// Any of the video or audio failed to get a slot so basically we assign new transceivers for both of them
 	if needNegotiation {
 		// I need to re define 10 tranceivers for video and audio each.
+		log.Printf("[SFU] No free AUDIO or VIDEO slot found. Creating more tranceivers")
+
 		err := s.CreateTranceivers(client)
 		if err != nil {
 			log.Printf("Existing transceivers are full error creating new ones : %s", err)
 		}
 
 		// Re-negotiate
+		log.Printf("Renegotiating the new transceivers %s", client.UserId)
+
+		// Do re-negotitation for all the users in the room
 		s.RenegotiateSubscriberOffer(client)
+
+		needNegotiation = false
 	}
 }

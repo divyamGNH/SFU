@@ -146,6 +146,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 			// wh.RoomHandler.LeaveRoom()
 
 		case "subscriber-answer":
+			log.Printf("Received subscriber answer")
 			answerMsg := &models.SubscriberAnswerMessage{}
 
 			err := json.Unmarshal(msg, answerMsg)

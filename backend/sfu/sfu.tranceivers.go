@@ -10,7 +10,7 @@ import (
 // create 10 tranceivers for audio and video each.
 func (s *SFU) CreateTranceivers(client *models.Client) error {
 	subscriberPc := client.Subscriber.PC
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 1; i++ {
 		videoT, err := subscriberPc.AddTransceiverFromKind(
 			webrtc.RTPCodecTypeVideo,
 			webrtc.RTPTransceiverInit{
@@ -55,6 +55,7 @@ func (s *SFU) SetTranceiversAsSlots(client *models.Client) {
 	transceivers := client.Subscriber.PendingTransceiver
 	client.Mu.RUnlock()
 
+	log.Println("Pending transceivers:", len(client.Subscriber.PendingTransceiver))
 	// Put each transceiver in a slot after the negotiation as the Mids are not stable before that which can cause problems.
 	for _, t := range transceivers {
 
@@ -94,4 +95,6 @@ func (s *SFU) SetTranceiversAsSlots(client *models.Client) {
 			log.Println("Added one to the AS")
 		}
 	}
+
+	client.Subscriber.PendingTransceiver = nil
 }

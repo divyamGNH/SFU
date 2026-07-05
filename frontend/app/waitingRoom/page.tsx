@@ -412,98 +412,109 @@ export default function WaitingPage() {
           break;
 
         case "subscriber-offer":
-          console.log("Subscriber offer received");
+          console.log(
+            "Subscriber offer",
+            message.sdp.type,
+            message.sdp.sdp?.slice(0,40),
+            Date.now(),
+          );
 
           // Get all the ice server
           const iceServers = await getIceServers();
 
           // create offer
-          const subscriberPc = new RTCPeerConnection({
-            iceServers,
-          });
+          if (subscriberPcRef.current == null) {
+            const subscriberPc = new RTCPeerConnection({
+              iceServers,
+            });
 
-          subscriberPcRef.current = subscriberPc;
+            subscriberPcRef.current = subscriberPc;
 
-          subscriberPc.ontrack = (event) => {
-            console.log(
-              "TRACK RECEIVED",
-              event.track.kind,
-              event.track.id,
-              event.transceiver.mid
-            );
+            subscriberPc.ontrack = (event) => {
+              console.log(
+                "TRACK RECEIVED",
+                event.track.kind,
+                event.track.id,
+                event.transceiver.mid
+              );
 
-            const track = event.track;
-            const mid = event.transceiver.mid;
+              const track = event.track;
+              const mid = event.transceiver.mid;
 
-            if (!mid) {
-              console.log("MID missing");
-              return;
-            }
-
-            const publisherId = midToPublisherRef.current[mid];
-
-            // Queue track if publisher metadata not arrived yet
-            if (!publisherId) {
-              console.log("Queueing track for MID:", mid);
-
-              if (!pendingTracksRef.current[mid]) {
-                pendingTracksRef.current[mid] = [];
+              if (!mid) {
+                console.log("MID missing");
+                return;
               }
 
-              pendingTracksRef.current[mid].push(event);
+              const publisherId = midToPublisherRef.current[mid];
 
-              return;
-            }
+              // Queue track if publisher metadata not arrived yet
+              if (!publisherId) {
+                console.log("Queueing track for MID:", mid);
 
-            attachTrackToPeer(publisherId, track);
+                if (!pendingTracksRef.current[mid]) {
+                  pendingTracksRef.current[mid] = [];
+                }
 
-            console.log(`Attached ${track.kind} track for ${publisherId}`);
-          };
+                pendingTracksRef.current[mid].push(event);
 
-          subscriberPc.onicecandidate = (event) => {
-            if (event.candidate) {
-              sendMessage({
-                type: "subscriber-ice-candidate",
-                iceCandidate: event.candidate.toJSON(),
-              });
-            }
-          };
+                return;
+              }
 
-          subscriberPc.oniceconnectionstatechange = () => {
-            console.log(
-              `ICE connection state change for subscriber: ${subscriberPc.iceConnectionState}`,
-            );
-          };
+              attachTrackToPeer(publisherId, track);
 
-          subscriberPc.onconnectionstatechange = () => {
-            console.log(
-              `Subscriber Connection state: ${subscriberPc.connectionState} | Subscriber ICE state: ${subscriberPc.iceConnectionState}`,
-            );
+              console.log(`Attached ${track.kind} track for ${publisherId}`);
+            };
 
-            if (subscriberPc.connectionState === "connected") {
-              setInterval(async () => {
-                const stats = await subscriberPc.getStats();
-
-                stats.forEach((report) => {
-                  if (
-                    report.type === "inbound-rtp" &&
-                    report.kind === "audio"
-                  ) {
-                    console.log(
-                      "AUDIO RTP",
-                      report.mid,
-                      report.packetsReceived,
-                      report.bytesReceived
-                    );
-                  }
+            subscriberPc.onicecandidate = (event) => {
+              if (event.candidate) {
+                sendMessage({
+                  type: "subscriber-ice-candidate",
+                  iceCandidate: event.candidate.toJSON(),
                 });
-              }, 2000);
-            }
-          };
+              }
+            };
+
+            subscriberPc.oniceconnectionstatechange = () => {
+              console.log(
+                `ICE connection state change for subscriber: ${subscriberPc.iceConnectionState}`,
+              );
+            };
+
+            subscriberPc.onconnectionstatechange = () => {
+              console.log(
+                `Subscriber Connection state: ${subscriberPc.connectionState} | Subscriber ICE state: ${subscriberPc.iceConnectionState}`,
+              );
+
+              if (subscriberPc.connectionState === "connected") {
+                setInterval(async () => {
+                  const stats = await subscriberPc.getStats();
+
+                  stats.forEach((report) => {
+                    if (
+                      report.type === "inbound-rtp" &&
+                      report.kind === "audio"
+                    ) {
+                      // console.log(
+                      //   "AUDIO RTP",
+                      //   report.mid,
+                      //   report.packetsReceived,
+                      //   report.bytesReceived
+                      // );
+                    }
+                  });
+                }, 2000);
+              }
+            };
+          }
+
+          // Get the old subscriber pc.
+          const subscriberPc = subscriberPcRef.current;
 
           // Set remoteDesc
           await subscriberPc.setRemoteDescription(message.sdp);
 
+          // create subscriber answer
           const answer = await subscriberPc.createAnswer();
 
           await subscriberPc.setLocalDescription(answer);
