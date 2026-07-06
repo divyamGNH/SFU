@@ -48,3 +48,25 @@ type PopulateRoomMessage struct {
 	RoomId string `json:"roomId"`
 	UserId string `json:"userId"`
 }
+
+type AudioToggleMessage struct {
+	Type  string `json:"type"`
+	Muted bool   `json:"muted"`
+}
+
+type VideoToggleMessage struct {
+	Type  string `json:"type"`
+	Muted bool   `json:"muted"`
+}
+
+type AudioToggleMessageRes struct {
+	Type   string `json:"type"`
+	UserId string `json:"userId"`
+	Muted  bool   `json:"muted"`
+}
+
+type VideoToggleMessageRes struct {
+	Type   string `json:"type"`
+	UserId string `json:"userId"`
+	Muted  bool   `json:"muted"`
+}

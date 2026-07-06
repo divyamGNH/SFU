@@ -11,6 +11,7 @@ import (
 // Use this client struct as later on we dont just need pc we would need userId, roomId etc a lot of things that is why use this struct.
 
 // TODO : Currently we generate the userId using UUID on each request which is not okay so implement auth and then we need to get the userId on the server side from the cookie/jwt.
+// Audio or VideoBool being false means the client's mic or camera is on.
 type Client struct {
 	UserId         string            `json:"userId"`
 	RoomId         string            `json:"roomId"`
@@ -18,6 +19,8 @@ type Client struct {
 	Publisher      *Publisher        `json:"publisher"`
 	Subscriber     *Subscriber       `json:"subscriber"`
 	MidToPublisher map[string]string `json:"midToPublisher"`
+	AudioBool      bool              `json:"audioBool"`
+	VideoBool      bool              `json:"videoBool"`
 	ClientClosed   bool
 
 	Mu   sync.RWMutex

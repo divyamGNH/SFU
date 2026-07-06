@@ -39,7 +39,9 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 		MidToPublisher: make(map[string]string),
 		// VideoSlots:     make([]*models.MediaSlot, 0, 256),
 		// AudioSlots:     make([]*models.MediaSlot, 0, 256),
-		Send: make(chan any, 256),
+		AudioBool: false,
+		VideoBool: false,
+		Send:      make(chan any, 256),
 	}
 	// log.Println("[WS] Client created succesfully")
 
@@ -167,6 +169,28 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 			}
 
 			wh.SFU.HandleSubscriberIce(subscriberIceMessage, client)
+
+		case "audio-toggle":
+			var audioToggleMessage models.AudioToggleMessage
+
+			err := json.Unmarshal(msg, &audioToggleMessage)
+			if err != nil {
+				log.Println("[WS] Error decoding audio-toggle message:", err)
+				return
+			}
+
+			wh.SFU.HandleToggleAudio(audioToggleMessage.Muted, client)
+
+		case "video-toggle":
+			var videoToggleMessage models.VideoToggleMessage
+
+			err := json.Unmarshal(msg, &videoToggleMessage)
+			if err != nil {
+				log.Println("[WS] Error decoding video-toggle message:", err)
+				return
+			}
+
+			wh.SFU.HandleToggleVideo(videoToggleMessage.Muted, client)
 
 		default:
 			log.Println("[WS] Unknown message type received:", base.Type)

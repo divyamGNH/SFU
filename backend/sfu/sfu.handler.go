@@ -28,6 +28,27 @@ func NewSFU(roomManager RoomManager) *SFU {
 	}
 }
 
+// TODO  : Find a better and a more central place to put this function so that the whole codebase can use it and the code stays production grade.
+// Send the socket message to every peer in the room.
+func (s *SFU) BroadcastMessage(msg any, client *models.Client) {
+	roomId := client.RoomId
+	userId := client.UserId
+
+	// Get other peers from the room
+	otherPeers, ok := s.rm.GetOtherPeersFromARoom(roomId, userId)
+	if !ok {
+		log.Printf("Error braodcasting socket event roomId : %s and userId : %s", roomId, userId)
+		return
+	}
+
+	for _, peer := range otherPeers {
+		ok := peer.SafeSend(msg)
+		if !ok {
+			log.Printf("Error sending the broadcast message to peer : %s from cliendId : %s", peer.UserId, userId)
+		}
+	}
+}
+
 func (s *SFU) FlushICECandidateQueue(client *models.Client) {
 	client.Publisher.Mu.Lock()
 
@@ -472,4 +493,34 @@ func (s *SFU) RenegotiateSubscriberAnswer(answer *models.SubscriberAnswerMessage
 
 	// Set the new transceivers as slots.
 	s.SetTranceiversAsSlots(client)
+}
+
+func (s *SFU) HandleToggleAudio(muted bool, client *models.Client) {
+	client.Mu.Lock()
+	client.AudioBool = muted
+	client.Mu.Unlock()
+
+	msg := &models.AudioToggleMessageRes{
+		Type:   "audio-toggle",
+		UserId: client.UserId,
+		Muted:  client.AudioBool,
+	}
+
+	// Send a event to the other peers in the room so that they can update their UI.
+	s.BroadcastMessage(msg, client)
+}
+
+func (s *SFU) HandleToggleVideo(muted bool, client *models.Client) {
+	client.Mu.Lock()
+	client.VideoBool = muted
+	client.Mu.Unlock()
+
+	msg := &models.VideoToggleMessageRes{
+		Type:   "video-toggle",
+		UserId: client.UserId,
+		Muted:  client.VideoBool,
+	}
+
+	// Send a event to the other peers in the room so that they can update their UI.
+	s.BroadcastMessage(msg, client)
 }

@@ -8,7 +8,7 @@ import type {
   ServerToClientMessage,
   SubscriberAnswerMessage,
 } from "@/types/wsMessageTypes";
-import { ErrorResponse, LeaveRoomResponse, ViewRoomResponse } from "@/types/httpMessageTypes";
+import { ErrorResponse, ViewRoomResponse } from "@/types/httpMessageTypes";
 
 export default function WaitingPage() {
   const BASE_URL =
@@ -26,6 +26,11 @@ export default function WaitingPage() {
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
 
   const [otherPeers, setOtherPeers] = useState<string[]>([]);
+  const [isMicMuted, setIsMicMuted] = useState<boolean>(false);
+  const [isVideoOff, setIsVideoOff] = useState<boolean>(false);
+  const [peerMediaState, setPeerMediaState] = useState<
+    Record<string, { audioMuted: boolean; videoMuted: boolean }>
+  >({});
 
   const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
   const pendingSubscriberIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
@@ -142,10 +147,85 @@ export default function WaitingPage() {
   // Remove the peer that left from the room states.
   const removePeer = (leftUserId: string) => {
     setOtherPeers((prev) => prev.filter((peerId) => peerId !== leftUserId));
+    setPeerMediaState((prev) => {
+      if (!(leftUserId in prev)) {
+        return prev;
+      }
+
+      const nextState = { ...prev };
+      delete nextState[leftUserId];
+
+      return nextState;
+    });
 
     delete remoteVideoRefs.current[leftUserId];
     delete remoteStreamsRef.current[leftUserId];
   };
+
+  const updatePeerMediaState = (
+    peerId: string,
+    nextState: Partial<{ audioMuted: boolean; videoMuted: boolean }>,
+  ) => {
+    setPeerMediaState((prev) => {
+      const currentState = prev[peerId] ?? {
+        audioMuted: false,
+        videoMuted: false,
+      };
+
+      return {
+        ...prev,
+        [peerId]: {
+          ...currentState,
+          ...nextState,
+        },
+      };
+    });
+  };
+
+  // To toggle either audio or video.
+  const toggleLocalTrackEnabled = (kind: "audio" | "video") : boolean | null => {
+    // Get the localstream.
+    const stream = localStreamRef.current;
+    if (!stream) return null;
+
+    // Get the tracks.
+    const tracks = kind === "audio" ? stream.getAudioTracks() : stream.getVideoTracks();
+    if (tracks.length === 0) return null;
+
+    // Toggle them.
+    const nextEnabled = !tracks[0].enabled;
+    tracks.forEach((track) => {
+      track.enabled = nextEnabled;
+    });
+
+    if (kind === "audio") {
+      setIsMicMuted(!nextEnabled);
+      return !nextEnabled;
+    }
+
+    setIsVideoOff(!nextEnabled);
+    return !nextEnabled;
+  };
+
+  function handleToggleMic() {
+    const muted = toggleLocalTrackEnabled("audio");
+    if(muted == null) return;
+
+    sendMessage({
+      type : "audio-toggle",
+      muted
+    });
+  }
+
+  function handleToggleVideo() {
+    const muted = toggleLocalTrackEnabled("video");
+    if(muted == null) return;
+
+    sendMessage({
+      type : "video-toggle",
+      muted
+    })
+  }
 
   // handle the leave button or a unexpected leave of the user from the call.
   async function handleLeave() {
@@ -400,6 +480,10 @@ export default function WaitingPage() {
             setOtherPeers((prev) =>
               prev.includes(message.userId) ? prev : [...prev, message.userId],
             );
+            updatePeerMediaState(message.userId, {
+              audioMuted: false,
+              videoMuted: false,
+            });
           }
 
           break;
@@ -415,7 +499,7 @@ export default function WaitingPage() {
           console.log(
             "Subscriber offer",
             message.sdp.type,
-            message.sdp.sdp?.slice(0,40),
+            message.sdp.sdp?.slice(0, 40),
             Date.now(),
           );
 
@@ -569,6 +653,20 @@ export default function WaitingPage() {
 
           break;
 
+        case "audio-toggle":
+          updatePeerMediaState(message.userId, {
+            audioMuted: message.muted,
+          });
+
+          break;
+
+        case "video-toggle":
+          updatePeerMediaState(message.userId, {
+            videoMuted: message.muted,
+          });
+
+          break;
+
         default:
           console.log("Unknown websocket message:", message);
       }
@@ -685,6 +783,20 @@ export default function WaitingPage() {
         : [];
 
       setOtherPeers(peers);
+      setPeerMediaState((prev) => {
+        const nextState = { ...prev };
+
+        for (const peerId of peers) {
+          if (!nextState[peerId]) {
+            nextState[peerId] = {
+              audioMuted: false,
+              videoMuted: false,
+            };
+          }
+        }
+
+        return nextState;
+      });
     } catch (error) {
       console.error("Error setting up RTC environment:", error);
 
@@ -740,6 +852,7 @@ export default function WaitingPage() {
       }
 
       localStreamRef.current = null;
+      setPeerMediaState({});
     };
   }, []);
 
@@ -799,42 +912,202 @@ export default function WaitingPage() {
               autoPlay
               muted
               playsInline
-              className="h-64 w-full object-cover sm:h-72"
+              className={`h-64 w-full object-cover transition-opacity duration-300 sm:h-72 ${isVideoOff ? "opacity-0" : "opacity-100"}`}
             />
 
+            {isVideoOff ? (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-slate-950/95 px-4 text-center">
+                <div className="flex h-16 w-16 items-center justify-center rounded-full border border-slate-700 bg-slate-900 text-slate-300">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="h-8 w-8"
+                  >
+                    <path d="M15 10.5V8a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-2.5l5 3.5V7l-5 3.5Z" />
+                    <path d="M4 4l16 16" />
+                  </svg>
+                </div>
+
+                <p className="text-sm font-medium text-slate-200">Camera off</p>
+              </div>
+            ) : null}
+
             <div className="absolute inset-x-0 bottom-0 h-20 bg-linear-to-t from-black/70 to-transparent" />
+
+            <div className="absolute bottom-3 right-3 flex items-center gap-2 rounded-full border border-slate-700/80 bg-black/60 px-2.5 py-1.5 backdrop-blur-sm">
+              <span
+                className={`flex h-6 w-6 items-center justify-center rounded-full border ${isMicMuted ? "border-rose-400/70 bg-rose-500/20 text-rose-200" : "border-slate-500/60 bg-slate-800 text-slate-100"}`}
+                aria-label={isMicMuted ? "Microphone muted" : "Microphone on"}
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="h-3.5 w-3.5"
+                >
+                  <path d="M12 15a3 3 0 0 0 3-3V7a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3Z" />
+                  <path d="M19 11a7 7 0 0 1-14 0" />
+                  <path d="M12 18v3" />
+                  <path d="M9 21h6" />
+                  {isMicMuted ? <path d="M4 4l16 16" /> : null}
+                </svg>
+              </span>
+
+              <span className="text-[11px] font-medium text-slate-200">
+                {isMicMuted ? "Muted" : "Live"}
+              </span>
+            </div>
 
             <div className="absolute bottom-3 left-3 rounded-md border border-cyan-300/40 bg-black/60 px-2.5 py-1 text-xs font-medium text-cyan-100">
               You | {shortId(userId)}
             </div>
           </div>
 
-          {otherPeers.map((peerId) => (
-            <div
-              key={peerId}
-              className="group relative overflow-hidden rounded-2xl border border-slate-700 bg-slate-900 shadow-lg shadow-black/30 transition duration-300 hover:-translate-y-0.5 hover:border-indigo-300/55"
-            >
-              <video
-                ref={(el) => {
-                  remoteVideoRefs.current[peerId] = el;
+          {otherPeers.map((peerId) => {
+            const peerState = peerMediaState[peerId] ?? {
+              audioMuted: false,
+              videoMuted: false,
+            };
 
-                  if (el && remoteStreamsRef.current[peerId]) {
-                    el.srcObject = remoteStreamsRef.current[peerId];
-                  }
-                }}
-                autoPlay
-                playsInline
-                muted={false}
-                className="h-64 w-full object-cover sm:h-72"
-              />
+            return (
+              <div
+                key={peerId}
+                className="group relative overflow-hidden rounded-2xl border border-slate-700 bg-slate-900 shadow-lg shadow-black/30 transition duration-300 hover:-translate-y-0.5 hover:border-indigo-300/55"
+              >
+                <video
+                  ref={(el) => {
+                    remoteVideoRefs.current[peerId] = el;
 
-              <div className="absolute inset-x-0 bottom-0 h-20 bg-linear-to-t from-black/70 to-transparent" />
+                    if (el && remoteStreamsRef.current[peerId]) {
+                      el.srcObject = remoteStreamsRef.current[peerId];
+                    }
+                  }}
+                  autoPlay
+                  playsInline
+                  muted={false}
+                  className={`h-64 w-full object-cover transition-opacity duration-300 sm:h-72 ${peerState.videoMuted ? "opacity-0" : "opacity-100"}`}
+                />
 
-              <div className="absolute bottom-3 left-3 rounded-md border border-indigo-300/35 bg-black/60 px-2.5 py-1 text-xs font-medium text-slate-100">
-                Peer | {shortId(peerId)}
+                {peerState.videoMuted ? (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-slate-950/95 px-4 text-center">
+                    <div className="flex h-16 w-16 items-center justify-center rounded-full border border-slate-700 bg-slate-900 text-slate-300">
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.8"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        className="h-8 w-8"
+                      >
+                        <path d="M15 10.5V8a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-2.5l5 3.5V7l-5 3.5Z" />
+                        <path d="M4 4l16 16" />
+                      </svg>
+                    </div>
+
+                    <p className="text-sm font-medium text-slate-200">Camera off</p>
+                  </div>
+                ) : null}
+
+                <div className="absolute inset-x-0 bottom-0 h-20 bg-linear-to-t from-black/70 to-transparent" />
+
+                <div className="absolute bottom-3 right-3 flex items-center gap-2 rounded-full border border-slate-700/80 bg-black/60 px-2.5 py-1.5 backdrop-blur-sm">
+                  <span
+                    className={`flex h-6 w-6 items-center justify-center rounded-full border ${peerState.audioMuted ? "border-rose-400/70 bg-rose-500/20 text-rose-200" : "border-slate-500/60 bg-slate-800 text-slate-100"}`}
+                    aria-label={peerState.audioMuted ? "Microphone muted" : "Microphone on"}
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="h-3.5 w-3.5"
+                    >
+                      <path d="M12 15a3 3 0 0 0 3-3V7a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3Z" />
+                      <path d="M19 11a7 7 0 0 1-14 0" />
+                      <path d="M12 18v3" />
+                      <path d="M9 21h6" />
+                      {peerState.audioMuted ? <path d="M4 4l16 16" /> : null}
+                    </svg>
+                  </span>
+
+                  <span className="text-[11px] font-medium text-slate-200">
+                    {peerState.audioMuted ? "Muted" : "Live"}
+                  </span>
+                </div>
+
+                <div className="absolute bottom-3 left-3 rounded-md border border-indigo-300/35 bg-black/60 px-2.5 py-1 text-xs font-medium text-slate-100">
+                  Peer | {shortId(peerId)}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="pointer-events-none fixed inset-x-0 bottom-6 z-20 flex justify-center px-4">
+        <div className="pointer-events-auto flex items-center gap-3 rounded-full border border-slate-700/80 bg-slate-900/90 px-4 py-3 shadow-2xl shadow-black/40 backdrop-blur-md">
+          <button
+            type="button"
+            onClick={handleToggleMic}
+            aria-pressed={isMicMuted}
+            aria-label={isMicMuted ? "Unmute microphone" : "Mute microphone"}
+            className={`flex h-12 w-12 items-center justify-center rounded-full border transition duration-200 ${isMicMuted
+              ? "border-rose-400/60 bg-rose-500/15 text-rose-200 hover:bg-rose-500/25"
+              : "border-slate-600 bg-slate-800 text-slate-100 hover:bg-slate-700"
+              }`}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="h-5 w-5"
+            >
+              <path d="M12 15a3 3 0 0 0 3-3V7a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3Z" />
+              <path d="M19 11a7 7 0 0 1-14 0" />
+              <path d="M12 18v3" />
+              <path d="M9 21h6" />
+              {isMicMuted ? <path d="M4 4l16 16" /> : null}
+            </svg>
+          </button>
+
+          <div className="h-8 w-px bg-slate-700" />
+
+          <button
+            type="button"
+            onClick={handleToggleVideo}
+            aria-pressed={isVideoOff}
+            aria-label={isVideoOff ? "Turn camera on" : "Turn camera off"}
+            className={`flex h-12 w-12 items-center justify-center rounded-full border transition duration-200 ${isVideoOff
+              ? "border-rose-400/60 bg-rose-500/15 text-rose-200 hover:bg-rose-500/25"
+              : "border-slate-600 bg-slate-800 text-slate-100 hover:bg-slate-700"
+              }`}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="h-5 w-5"
+            >
+              <path d="M15 10.5V8a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-2.5l5 3.5V7l-5 3.5Z" />
+              {isVideoOff ? <path d="M4 4l16 16" /> : null}
+            </svg>
+          </button>
         </div>
       </div>
     </div>

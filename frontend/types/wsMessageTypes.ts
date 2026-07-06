@@ -14,13 +14,25 @@ export type IceCandidateMessage = {
   iceCandidate: RTCIceCandidateInit;
 };
 
+export type AudioToggle = {
+  type : "audio-toggle",
+  muted : boolean
+}
+
+export type VideoToggle = {
+  type : "video-toggle",
+  muted : boolean
+}
+
 export type ClientToServerMessage =
   | OfferMessage
   | PopulateRoomMessage
   | SubscriberAnswerMessage
   | SubscriberICEMessage
   | PeerLeftMessage
-  | IceCandidateMessage;
+  | IceCandidateMessage
+  | AudioToggle
+  | VideoToggle;
 
 export type AnswerMessage = {
   type: "answer";
@@ -64,6 +76,18 @@ export type IncomingIceCandidateMessage = {
   iceCandidate: RTCIceCandidateInit;
 };
 
+type IncomingAudioToggle = {
+    type: "audio-toggle";
+    userId: string;
+    muted: boolean;
+}
+
+type IncomingVideoToggle = {
+    type: "video-toggle";
+    userId: string;
+    muted: boolean;
+}
+
 export type ServerToClientMessage =
   | AnswerMessage
   | SubscriberOfferMessage
@@ -71,6 +95,8 @@ export type ServerToClientMessage =
   | PeerJoinedMessage
   | PeerLeftMessage
   | MediaPublishedMessage
-  | IncomingIceCandidateMessage;
+  | IncomingIceCandidateMessage
+  | IncomingAudioToggle 
+  | IncomingVideoToggle;
 
 export type WSMessage = ClientToServerMessage | ServerToClientMessage;
