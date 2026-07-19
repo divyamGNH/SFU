@@ -7,10 +7,12 @@ import (
 	"github.com/pion/webrtc/v3"
 )
 
+const MAX_TRANSCEIVERS = 1
+
 // create 10 tranceivers for audio and video each.
 func (s *SFU) CreateTranceivers(client *models.Client) error {
 	subscriberPc := client.Subscriber.PC
-	for i := 0; i < 1; i++ {
+	for i := 0; i < MAX_TRANSCEIVERS; i++ {
 		videoT, err := subscriberPc.AddTransceiverFromKind(
 			webrtc.RTPCodecTypeVideo,
 			webrtc.RTPTransceiverInit{

@@ -4,6 +4,8 @@ import (
 	"log"
 	"sync"
 
+	"backend/sfu/pool"
+
 	"github.com/gorilla/websocket"
 	"github.com/pion/webrtc/v3"
 )
@@ -39,22 +41,12 @@ type Subscriber struct {
 	RemoteDescSet      bool
 	PendingCandidates  []ICECandidateMessage
 	PendingTransceiver []*webrtc.RTPTransceiver
-	VideoSlots         []*MediaSlot
-	AudioSlots         []*MediaSlot
+	VideoPool          *pool.Pool
+	AudioPool          *pool.Pool
 	Mu                 sync.RWMutex
 }
 
-type MediaSlot struct {
-	Transceiver      *webrtc.RTPTransceiver
-	Occupied         bool
-	PublisherId      string
-	Kind             webrtc.RTPCodecType
-	DrainRTCPStarted bool
-	TrackID          string
-
-	Mu sync.RWMutex
-}
-
+// Remove the Mutex from here as this value is fully initilized once and then only passed and read from and is never mutated.
 type PublishedTrack struct {
 	PublisherID string
 	TrackID     string
@@ -78,8 +70,8 @@ func (s *Subscriber) CleanUpSubscriber() {
 	}
 
 	// Optional to clean up internal resources but better practice and more safe to clean them.
-	s.VideoSlots = nil
-	s.AudioSlots = nil
+	s.VideoPool = nil
+	s.AudioPool = nil
 	s.PendingCandidates = nil
 }
 
@@ -153,8 +145,7 @@ func (c *Client) WritePump() {
 	}
 }
 
-//TODO : Implement PING/PONG Hearbeat solution for zombie clients.
-
+// TODO : Implement PING/PONG Hearbeat solution for zombie clients.
 func (c *Client) SafeSend(msg any) bool {
 
 	c.Mu.RLock()
