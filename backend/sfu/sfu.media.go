@@ -2,6 +2,7 @@ package sfu
 
 import (
 	"backend/models"
+	"backend/sfu/pool"
 	"log"
 
 	"github.com/pion/rtcp"
@@ -40,7 +41,7 @@ func (s *SFU) SendPLIToPublisher(publishedTrack *models.PublishedTrack) {
 }
 
 // Drain and read RTCP packets to get various informations like PLI, NACK, FIR etc.
-func (s *SFU) DrainRTCP(slot *models.MediaSlot, publishedTrack *models.PublishedTrack) {
+func (s *SFU) DrainRTCP(slot *pool.MediaSlot, publishedTrack *models.PublishedTrack) {
 	// Create a new go routine so this is basically a readPump
 	log.Println("inside drain rtcp")
 	slot.Mu.Lock()
@@ -90,7 +91,7 @@ func (s *SFU) DrainRTCP(slot *models.MediaSlot, publishedTrack *models.Published
 	}()
 }
 
-func IsTrackAlreadyPublished(slots []*models.MediaSlot, publishedTrack *models.PublishedTrack) bool {
+func IsTrackAlreadyPublished(slots []*pool.MediaSlot, publishedTrack *models.PublishedTrack) bool {
 
 	for _, slot := range slots {
 

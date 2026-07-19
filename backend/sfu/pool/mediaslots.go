@@ -14,6 +14,7 @@ import (
 
 // Slotstate is immutable once made never edit. Every time replace with a new object and atomic swap it.
 // As we never mutate this we dont need a mutex.
+// Generation is incremented every time it's state changes in Assign and Clear.
 type SlotState struct {
 	PublisherId      string
 	TrackID          string
@@ -32,6 +33,7 @@ type MediaSlot struct {
 	mu     sync.RWMutex
 }
 
+// Called by pool.Acquire
 func (m *MediaSlot) Assign(publisherId, trackId string, kind webrtc.RTPCodecType) (uint64, chan struct{}) {
 	m.mu.Lock()
 
@@ -60,7 +62,8 @@ func (m *MediaSlot) Assign(publisherId, trackId string, kind webrtc.RTPCodecType
 	return gen, m.doneCh
 }
 
-func (m *MediaSlot) Release() {
+// Called by pool.Release
+func (m *MediaSlot) Clear() {
 	m.mu.Lock()
 
 	// Close the channel and mark it null.
