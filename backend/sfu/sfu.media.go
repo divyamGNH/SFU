@@ -41,240 +41,164 @@ func (s *SFU) SendPLIToPublisher(publishedTrack *models.PublishedTrack) {
 }
 
 // Drain and read RTCP packets to get various informations like PLI, NACK, FIR etc.
-func (s *SFU) DrainRTCP(slot *pool.MediaSlot, publishedTrack *models.PublishedTrack) {
+func (s *SFU) DrainRTCP(slot *pool.MediaSlot) {
 	// Create a new go routine so this is basically a readPump
 	log.Println("inside drain rtcp")
-	slot.Mu.Lock()
-	if slot.DrainRTCPStarted {
-		slot.Mu.Unlock()
-		return
-	}
-	slot.DrainRTCPStarted = true
-	slot.Mu.Unlock()
+
 	sender := slot.Transceiver.Sender()
 
-	go func() {
-		rtcpBuf := make([]byte, 256)
+	rtcpBuf := make([]byte, 256)
 
-		//We are just reading this not using any of the RTCP packet actually just draining so the buffer does not crash the code.
-		for {
-			n, _, err := sender.Read(rtcpBuf)
-			if err != nil {
-				log.Println("[SFU] error in reading RTCP packet sender closed:", err)
-				return
-			}
-
-			packets, err := rtcp.Unmarshal(rtcpBuf[:n])
-			if err != nil {
-				log.Println("[SFU] error in unmarshalling the rtcp buffer into packets", err)
-				return
-			}
-
-			for _, packet := range packets {
-				switch packet.(type) {
-				case *rtcp.PictureLossIndication:
-					log.Println("[SFU] PLI received.")
-					s.SendPLIToPublisher(publishedTrack)
-
-				case *rtcp.FullIntraRequest:
-					log.Println("[SFU] FIR received")
-					s.SendPLIToPublisher(publishedTrack)
-
-				case *rtcp.TransportLayerNack:
-					log.Println("[SFU] Transport layer NACK received")
-
-				case *rtcp.ReceiverReport:
-					// log.Println("[SFU] Receviver Report received")
-				}
-			}
-		}
-	}()
-}
-
-func IsTrackAlreadyPublished(slots []*pool.MediaSlot, publishedTrack *models.PublishedTrack) bool {
-
-	for _, slot := range slots {
-
-		slot.Mu.RLock()
-
-		alreadyPublished := slot.Occupied && slot.PublisherId == publishedTrack.PublisherID && slot.TrackID == publishedTrack.TrackID
-
-		slot.Mu.RUnlock()
-
-		if alreadyPublished {
-			return true
-		}
-	}
-
-	return false
-}
-
-// Send media to a single client specified in the function.
-func (s *SFU) PublishVideoStream(client *models.Client, publishedTrack *models.PublishedTrack) bool {
-
-	// Search for free slots.
-	for index, slot := range client.Subscriber.VideoSlots {
-
-		slot.Mu.Lock()
-
-		// Get the MID.
-		mid := slot.Transceiver.Mid()
-		if mid == "" {
-			log.Println("[SFU] MID is empty for video")
-			slot.Mu.Unlock()
-			continue
-		}
-		log.Printf("[SFU][VIDEO] Checking slot=%d MID=%v occupied=%v", index, mid, slot.Occupied)
-
-		// Check if the slot is already occupied or not.
-		if slot.Occupied {
-			log.Printf("[SFU][VIDEO] Slot already occupied slot=%d MID=%v publisher=%v trackID=%v", index, mid, slot.PublisherId, slot.TrackID)
-			slot.Mu.Unlock()
-			continue
-		}
-
-		// Find the sender.
-		sender := slot.Transceiver.Sender()
-		if sender == nil {
-			log.Printf("[SFU][VIDEO] Sender is nil slot=%d MID=%v", index, mid)
-			slot.Mu.Unlock()
-			continue
-		}
-
-		slot.Mu.Unlock()
-
-		// Replace the track to actually send the media.
-		err := sender.ReplaceTrack(publishedTrack.LocalTrack)
-		s.SendPLIToPublisher(publishedTrack)
+	//We are just reading this not using any of the RTCP packet actually just draining so the buffer does not crash the code.
+	for {
+		n, _, err := sender.Read(rtcpBuf)
 		if err != nil {
-			log.Println("[SFU] ReplaceTrack error for Video:", err)
+			log.Println("[SFU] error in reading RTCP packet sender closed:", err)
+			return
+		}
+
+		packets, err := rtcp.Unmarshal(rtcpBuf[:n])
+		if err != nil {
+			log.Println("[SFU] error in unmarshalling the rtcp buffer into packets", err)
+			return
+		}
+
+		st := slot.Load()
+		if st.PublisherId == "" {
 			continue
 		}
-		log.Printf("[SFU] ReplaceTrack success for videoSlot=%d MID=%v", index, mid)
 
-		slot.Mu.Lock()
-
-		//Update the slot states.
-		slot.Occupied = true
-		slot.PublisherId = publishedTrack.PublisherID
-		slot.TrackID = publishedTrack.TrackID
-		log.Println("Video Slot secured succesfully")
-		slot.Mu.Unlock()
-
-		client.Mu.Lock()
-		// store mid->publisher
-		client.MidToPublisher[mid] = publishedTrack.PublisherID
-		client.Mu.Unlock()
-
-		s.mu.Lock()
-		s.SubscriberToOccupiedSlots[client.UserId] = append(s.SubscriberToOccupiedSlots[client.UserId], slot)
-		s.mu.Unlock()
-
-		// Drain the RTCP packets for NACK, PLI etc.
-		s.DrainRTCP(slot, publishedTrack)
-		log.Println("DrainRTCP done for videoTrack")
-
-		log.Printf("[SFU] Sending media-published event for videoTrack MID=%v publisher=%v subscriber=%v", mid, publishedTrack.PublisherID, client.UserId)
-
-		// Create WS msg for sending the MID mapping so the frontend can map which track is from which user.
-		msg := models.PublishMediaMessage{
-			Type:      "media-published",
-			Mid:       mid,
-			Publisher: publishedTrack.PublisherID,
+		currentTrack := s.TrackIdToPublishedTracks[st.TrackID]
+		if currentTrack == nil {
+			continue
 		}
 
-		// Send the WS msg.
-		client.SafeSend(msg)
-		return false
+		for _, packet := range packets {
+			switch packet.(type) {
+			case *rtcp.PictureLossIndication:
+				log.Println("[SFU] PLI received.")
+				s.SendPLIToPublisher(currentTrack)
+
+			case *rtcp.FullIntraRequest:
+				log.Println("[SFU] FIR received")
+				s.SendPLIToPublisher(currentTrack)
+
+			case *rtcp.TransportLayerNack:
+				log.Println("[SFU] Transport layer NACK received")
+
+			case *rtcp.ReceiverReport:
+				// log.Println("[SFU] Receviver Report received")
+			}
+		}
 	}
-
-	log.Printf("[SFU][VIDEO] No free VIDEO slot found subscriber=%v publisher=%v trackID=%v", client.UserId, publishedTrack.PublisherID, publishedTrack.TrackID)
-
-	return true
 }
 
-func (s *SFU) PublishAudioStream(client *models.Client, publishedTrack *models.PublishedTrack) bool {
+// Send video realted media to a single client specified in the function.
+// return bool needNegotiation, bool alreadyPublished, error
+func (s *SFU) PublishVideoStream(client *models.Client, publishedTrack *models.PublishedTrack) (bool, bool, error) {
 
-	log.Printf("[SFU][AUDIO] Searching for free slot subscriber=%v totalSlots=%d", client.UserId, len(client.Subscriber.AudioSlots))
+	// Get the video pool.
+	videoPool := client.Subscriber.VideoPool
 
-	for index, slot := range client.Subscriber.AudioSlots {
-
-		slot.Mu.Lock()
-
-		mid := slot.Transceiver.Mid()
-		if mid == "" {
-			log.Println("[SFU] MID is empty for video")
-			slot.Mu.Unlock()
-			continue
-		}
-
-		log.Printf("[SFU][AUDIO] Checking slot=%d MID=%v occupied=%v", index, mid, slot.Occupied)
-
-		if slot.Occupied {
-			log.Printf("[SFU][AUDIO] Slot already occupied slot=%d MID=%v publisher=%v trackID=%v", index, mid, slot.PublisherId, slot.TrackID)
-			slot.Mu.Unlock()
-			continue
-		}
-
-		sender := slot.Transceiver.Sender()
-
-		if sender == nil {
-			log.Printf("[SFU][AUDIO] Sender is nil slot=%d MID=%v", index, mid)
-			slot.Mu.Unlock()
-			continue
-		}
-
-		log.Printf("[SFU][AUDIO] Replacing track slot=%d MID=%v publisher=%v trackID=%v", index, mid, publishedTrack.PublisherID, publishedTrack.TrackID)
-
-		slot.Mu.Unlock()
-
-		err := sender.ReplaceTrack(publishedTrack.LocalTrack)
-
-		if err != nil {
-			log.Println("[SFU][AUDIO] ReplaceTrack error:", err)
-			slot.Mu.Unlock()
-			continue
-		}
-
-		log.Printf("[SFU][AUDIO] ReplaceTrack success slot=%d MID=%v", index, mid)
-
-		slot.Mu.Lock()
-		// Fill the slot states.
-		slot.Occupied = true
-		slot.PublisherId = publishedTrack.PublisherID
-		slot.TrackID = publishedTrack.TrackID
-		slot.Mu.Unlock()
-
-		// Drain the RTCP.
-		s.DrainRTCP(slot, publishedTrack)
-		log.Println("RTCP Drain done for audio")
-
-		// Update client states.
-		client.Mu.Lock()
-		client.MidToPublisher[mid] = publishedTrack.PublisherID
-		client.Mu.Unlock()
-
-		s.mu.Lock()
-		s.SubscriberToOccupiedSlots[client.UserId] = append(s.SubscriberToOccupiedSlots[client.UserId], slot)
-		s.mu.Unlock()
-
-		log.Printf("[SFU][AUDIO] Sending media-published event MID=%v publisher=%v subscriber=%v", mid, publishedTrack.PublisherID, client.UserId)
-
-		// Create the WS message for the frontend.
-		msg := models.PublishMediaMessage{
-			Type:      "media-published",
-			Mid:       mid,
-			Publisher: publishedTrack.PublisherID,
-		}
-
-		// Send the WS message.
-		client.SafeSend(msg)
-		return false
+	// First check if the track is already been published or not.
+	if videoPool.ContainsTrack(publishedTrack.PublisherID, publishedTrack.TrackID) {
+		return false, true, nil
 	}
 
-	log.Printf("[SFU][AUDIO] No free AUDIO slot found subscriber=%v publisher=%v trackID=%v", client.UserId, publishedTrack.PublisherID, publishedTrack.TrackID)
+	// We get slot, generation, doneCh, boolean flag
+	slot, _, _, ok := client.Subscriber.VideoPool.Acquire(
+		publishedTrack.PublisherID,
+		publishedTrack.TrackID,
+		publishedTrack.Kind,
+	)
 
-	return true
+	if !ok {
+		// true means negotiation and Grow() is needed we need more transceivers.
+		return true, false, nil
+	}
+
+	// Attach the intended track to the sender
+	err := slot.Transceiver.Sender().ReplaceTrack(publishedTrack.LocalTrack)
+	if err != nil {
+		// There was a error replacing the track so free the slot we acquired to prevent slot leakage.
+		client.Subscriber.VideoPool.Release(slot.Index)
+		log.Printf("Error relacing video track : %v", err)
+		return false, false, err
+	}
+
+	// Check if the DrainRTCP is started for this slot or not. If not start it.
+	if !slot.TryStartDrainRTCP() {
+		// DrainRTCP already spins up a new go-routine internally.
+		go s.DrainRTCP(slot)
+	}
+
+	// Get the Mid of the transceiver for frontend mapping.
+	mid := slot.Transceiver.Mid()
+
+	// Create WS msg for sending the MID mapping so the frontend can map which track is from which user.
+	msg := models.PublishMediaMessage{
+		Type:      "media-published",
+		Mid:       mid,
+		Publisher: publishedTrack.PublisherID,
+	}
+
+	// Send the WS msg.
+	client.SafeSend(msg)
+	return false, false, nil
+}
+
+// Send audio related media to a single client specified in the function.
+// return bool needNegotiation, bool alreadyPublished, error
+func (s *SFU) PublishAudioStream(client *models.Client, publishedTrack *models.PublishedTrack) (bool, bool, error) {
+
+	// Get the audioPool
+	audioPool := client.Subscriber.AudioPool
+
+	// First check if the track is already been published or not.
+	if audioPool.ContainsTrack(publishedTrack.PublisherID, publishedTrack.TrackID) {
+		return false, true, nil
+	}
+
+	// We get slot, generation, doneCh, boolean flag
+	slot, _, _, ok := client.Subscriber.AudioPool.Acquire(
+		publishedTrack.PublisherID,
+		publishedTrack.TrackID,
+		publishedTrack.Kind,
+	)
+
+	if !ok {
+		// true means negotiation and Grow() is needed we need more transceivers.
+		return true, false, nil
+	}
+
+	// Attach the intended track to the sender
+	err := slot.Transceiver.Sender().ReplaceTrack(publishedTrack.LocalTrack)
+	if err != nil {
+		// There was a error replacing the track so free the slot we acquired to prevent slot leakage.
+		client.Subscriber.AudioPool.Release(slot.Index)
+		log.Printf("Error relacing video track : %w", err)
+		return false, false, err
+	}
+
+	// Check if the DrainRTCP is started for this slot or not. If not start it.
+	if !slot.TryStartDrainRTCP() {
+		// DrainRTCP already spins up a new go-routine internally.
+		go s.DrainRTCP(slot)
+	}
+
+	// Get the Mid of the transceiver for frontend mapping.
+	mid := slot.Transceiver.Mid()
+
+	// Create WS msg for sending the MID mapping so the frontend can map which track is from which user.
+	msg := models.PublishMediaMessage{
+		Type:      "media-published",
+		Mid:       mid,
+		Publisher: publishedTrack.PublisherID,
+	}
+
+	// Send the WS msg.
+	client.SafeSend(msg)
+	return false, false, nil
 }
 
 func (s *SFU) SendLocalMediaToRemotePeers(client *models.Client) {
@@ -287,38 +211,53 @@ func (s *SFU) SendLocalMediaToRemotePeers(client *models.Client) {
 	s.mu.RLock()
 	localTracks := append([]*models.PublishedTrack(nil), s.UserIdToPublishedTracks[client.UserId]...)
 	s.mu.RUnlock()
-	for _, peer := range otherPeers {
-		needNegotiation := false
 
+	for _, peer := range otherPeers {
 		for _, localtrack := range localTracks {
 			switch localtrack.Kind {
 			case webrtc.RTPCodecTypeVideo:
-				needNegotiation = needNegotiation || s.PublishVideoStream(peer, localtrack)
+				needVideoReNegotiation, alreadyPublished, err := s.PublishVideoStream(peer, localtrack)
+
+				if needVideoReNegotiation {
+					// Grow logic and debouncing logic here
+				} else if err != nil {
+					log.Printf("Error publishing the videoTrack %v", err)
+				} else if alreadyPublished {
+					log.Println("Video Track already published")
+				}
 
 			case webrtc.RTPCodecTypeAudio:
-				needNegotiation = needNegotiation || s.PublishAudioStream(peer, localtrack)
+				needAudioReNegotiation, alreadyPublished, err := s.PublishAudioStream(peer, localtrack)
+
+				if needAudioReNegotiation {
+					// Grow logic and debouncing logic here
+				} else if err != nil {
+					log.Printf("Error publishing the videoTrack %v", err)
+				} else if alreadyPublished {
+					log.Println("Video Track already published")
+				}
 			}
 		}
 
-		log.Printf("Negotiation needed or not status is : %t", needNegotiation)
-		// Any of the video or audio failed to get a slot so basically we assign new transceivers for both of them
-		if needNegotiation {
-			// I need to re define 10 tranceivers for video and audio each.
-			log.Printf("[SFU] No free AUDIO or VIDEO slot found. Creating more tranceivers")
+		// log.Printf("Negotiation needed or not status is : %t", needNegotiation)
+		// // Any of the video or audio failed to get a slot so basically we assign new transceivers for both of them
+		// if needNegotiation {
+		// 	// I need to re define 10 tranceivers for video and audio each.
+		// 	log.Printf("[SFU] No free AUDIO or VIDEO slot found. Creating more tranceivers")
 
-			err := s.CreateTranceivers(peer)
-			if err != nil {
-				log.Printf("Existing transceivers are full error creating new ones : %s", err)
-			}
+		// 	err := s.CreateTranceivers(peer)
+		// 	if err != nil {
+		// 		log.Printf("Existing transceivers are full error creating new ones : %s", err)
+		// 	}
 
-			// Re-negotiate
-			log.Printf("Renegotiating the new transceivers %s", peer.UserId)
+		// 	// Re-negotiate
+		// 	log.Printf("Renegotiating the new transceivers %s", peer.UserId)
 
-			// Do re-negotitation for all the users in the room
-			s.RenegotiateSubscriberOffer(peer)
+		// 	// Do re-negotitation for all the users in the room
+		// 	s.RenegotiateSubscriberOffer(peer)
 
-			needNegotiation = false
-		}
+		// 	needNegotiation = false
+		// }
 	}
 }
 
@@ -339,8 +278,6 @@ func (s *SFU) SendRemoteMediaToLocalPeer(client *models.Client) {
 		return
 	}
 
-	needNegotiation := false
-
 	for _, peer := range otherPeers {
 		tracks := s.UserIdToPublishedTracks[peer.UserId]
 
@@ -349,39 +286,47 @@ func (s *SFU) SendRemoteMediaToLocalPeer(client *models.Client) {
 			switch publishedTrack.Kind {
 
 			case webrtc.RTPCodecTypeVideo:
-				if IsTrackAlreadyPublished(client.Subscriber.VideoSlots, publishedTrack) {
-					log.Printf("[SFU] Track already published subscriber=%v publisher=%v trackID=%v", client.UserId, publishedTrack.PublisherID, publishedTrack.TrackID)
-					continue
+				needVideoReNegotiation, alreadyPublished, err := s.PublishVideoStream(client, publishedTrack)
+
+				if needVideoReNegotiation {
+					// Grow logic and debouncing logic here
+				} else if err != nil {
+					log.Printf("Error publishing the videoTrack %v", err)
+				} else if alreadyPublished {
+					log.Println("Video Track already published")
 				}
-				needNegotiation = needNegotiation || s.PublishVideoStream(client, publishedTrack)
 
 			case webrtc.RTPCodecTypeAudio:
-				if IsTrackAlreadyPublished(client.Subscriber.AudioSlots, publishedTrack) {
-					log.Printf("[SFU][AUDIO] Track already published subscriber=%v publisher=%v trackID=%v", client.UserId, publishedTrack.PublisherID, publishedTrack.TrackID)
-					continue
+				needAudioReNegotiation, alreadyPublished, err := s.PublishAudioStream(client, publishedTrack)
+
+				if needAudioReNegotiation {
+					// Grow logic and debouncing logic here
+				} else if err != nil {
+					log.Printf("Error publishing the videoTrack %v", err)
+				} else if alreadyPublished {
+					log.Println("Video Track already published")
 				}
-				needNegotiation = needNegotiation || s.PublishAudioStream(client, publishedTrack)
 			}
 		}
 	}
 
-	log.Printf("Negotiation needed or not status is : %t", needNegotiation)
-	// Any of the video or audio failed to get a slot so basically we assign new transceivers for both of them
-	if needNegotiation {
-		// I need to re define 10 tranceivers for video and audio each.
-		log.Printf("[SFU] No free AUDIO or VIDEO slot found. Creating more tranceivers")
+	// log.Printf("Negotiation needed or not status is : %t", needNegotiation)
+	// // Any of the video or audio failed to get a slot so basically we assign new transceivers for both of them
+	// if needNegotiation {
+	// 	// I need to re define 10 tranceivers for video and audio each.
+	// 	log.Printf("[SFU] No free AUDIO or VIDEO slot found. Creating more tranceivers")
 
-		err := s.CreateTranceivers(client)
-		if err != nil {
-			log.Printf("Existing transceivers are full error creating new ones : %s", err)
-		}
+	// 	err := s.CreateTranceivers(client)
+	// 	if err != nil {
+	// 		log.Printf("Existing transceivers are full error creating new ones : %s", err)
+	// 	}
 
-		// Re-negotiate
-		log.Printf("Renegotiating the new transceivers %s", client.UserId)
+	// 	// Re-negotiate
+	// 	log.Printf("Renegotiating the new transceivers %s", client.UserId)
 
-		// Do re-negotitation for all the users in the room
-		s.RenegotiateSubscriberOffer(client)
+	// 	// Do re-negotitation for all the users in the room
+	// 	s.RenegotiateSubscriberOffer(client)
 
-		needNegotiation = false
-	}
+	// 	needNegotiation = false
+	// }
 }

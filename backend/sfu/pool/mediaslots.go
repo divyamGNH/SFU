@@ -7,30 +7,30 @@ import (
 	"github.com/pion/webrtc/v3"
 )
 
-// Remove the occupied bool and decide if a slot is free from the publisherId = "" then free else not.
 // We have single video and audio pool right now if we in future create different pool for different codecs then we can make a array of pools.
-// We should funnel every function or stuff related to Media slot through the Pool so we dont need a Mu in mediaSlot. But the RTCP like DrainRTCP etc need drect access so we can just use atomics instead of Mu.
-// The options are use atomics or strictly use MediaSlot Mu only when i access it directly and not through the Pool.
 
 // Slotstate is immutable once made never edit. Every time replace with a new object and atomic swap it.
 // As we never mutate this we dont need a mutex.
 // Generation is incremented every time it's state changes in Assign and Clear.
 type SlotState struct {
-	PublisherId      string
-	TrackID          string
-	Kind             webrtc.RTPCodecType
-	DrainRTCPStarted bool
-	Generation       uint64
+	PublisherId string
+	TrackID     string
+	Kind        webrtc.RTPCodecType
+	Generation  uint64
 }
 
 // state has a atomic pointer to slotState and slotState itself does not have any Mutex or Atomic.
+// ready is a bool whihc is set true once the transceiver of the slot is stable that is only after the renegotiation is complete and the remoteSDP is set. Untill then it says in a deactivated state and can not be Acquired or Assigned
 type MediaSlot struct {
 	Transceiver *webrtc.RTPTransceiver
 	Index       int
 
-	state  atomic.Pointer[SlotState] // lock-free reads for RTCP
-	doneCh chan struct{}
-	mu     sync.RWMutex
+	// This ready is currently redundant as we use a free and a pending slice and only ever loop up the free slice while acquiring.
+	ready            atomic.Bool // Decides if a slot is ready to be Acquired/Assigned or not. False by default
+	drainRTCPStarted uint32
+	state            atomic.Pointer[SlotState] // lock-free reads for RTCP
+	doneCh           chan struct{}
+	mu               sync.RWMutex
 }
 
 // Called by pool.Acquire
@@ -65,6 +65,7 @@ func (m *MediaSlot) Assign(publisherId, trackId string, kind webrtc.RTPCodecType
 // Called by pool.Release
 func (m *MediaSlot) Clear() {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	// Close the channel and mark it null.
 	if m.doneCh != nil {
@@ -88,27 +89,14 @@ func (m *MediaSlot) Load() *SlotState {
 	return m.state.Load()
 }
 
-func (m *MediaSlot) MarkOrVerifyDrainRTCPStarted(expectedGen uint64) bool {
-	for {
-		current := m.state.Load()
+func (m *MediaSlot) Activate() {
+	// Activate the slot.
+	m.ready.Store(true)
+}
 
-		// Same generation check to verify if the slot has been reused or still in use.
-		if current.Generation != expectedGen {
-			return false
-		}
-
-		// If the drain has already started.
-		if current.DrainRTCPStarted {
-			return true
-		}
-
-		// If it was not started and is started now so flip the bool in the SlotState to true.
-		next := *current
-		next.DrainRTCPStarted = true
-		if m.state.CompareAndSwap(current, &next) {
-			return true
-		}
-
-		// If the CAS(Compare and Swap) fails for some reason like lets assume another routine came just in between the Load() and COmpareAndSwap() function and updated the "current" slotState then the "current" slotState we hold is outdated and we can not verify using this. Hence loop again for the new updated "current".
-	}
+// TryStartDrainRTCP returns true exactly once for this slot's entire lifetime —
+// the first caller to win the CAS (Compare and Swap) is the one that should launch the RTCP reader.
+// Every call after that returns false, forever.
+func (m *MediaSlot) TryStartDrainRTCP() bool {
+	return atomic.CompareAndSwapUint32(&m.drainRTCPStarted, 0, 1)
 }

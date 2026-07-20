@@ -4,6 +4,7 @@ package sfu
 
 import (
 	"backend/models"
+	"backend/sfu/pool"
 	"log"
 	"sync"
 
@@ -14,7 +15,8 @@ import (
 type SFU struct {
 	ConnToClient              map[*websocket.Conn]*models.Client
 	UserIdToPublishedTracks   map[string][]*models.PublishedTrack
-	SubscriberToOccupiedSlots map[string][]*models.MediaSlot
+	TrackIdToPublishedTracks  map[string]*models.PublishedTrack
+	SubscriberToOccupiedSlots map[string][]*pool.MediaSlot
 	rm                        RoomManager
 	mu                        sync.RWMutex
 }
@@ -23,7 +25,8 @@ func NewSFU(roomManager RoomManager) *SFU {
 	return &SFU{
 		ConnToClient:              make(map[*websocket.Conn]*models.Client),
 		UserIdToPublishedTracks:   make(map[string][]*models.PublishedTrack),
-		SubscriberToOccupiedSlots: make(map[string][]*models.MediaSlot),
+		TrackIdToPublishedTracks:  make(map[string]*models.PublishedTrack),
+		SubscriberToOccupiedSlots: make(map[string][]*pool.MediaSlot),
 		rm:                        roomManager,
 	}
 }
@@ -166,6 +169,7 @@ func (s *SFU) HandleOffer(signal models.SignalMessage, conn *websocket.Conn, cli
 		// Store the published track in the SFU struct map.
 		s.mu.Lock()
 		s.UserIdToPublishedTracks[client.UserId] = append(s.UserIdToPublishedTracks[client.UserId], publishedTrack)
+		s.TrackIdToPublishedTracks[remoteTrack.ID()] = publishedTrack
 		s.mu.Unlock()
 
 		s.SendLocalMediaToRemotePeers(client)
@@ -368,8 +372,8 @@ func (s *SFU) SendSubscriberOffer(client *models.Client) {
 		PC:                subscriberPc,
 		RemoteDescSet:     false,
 		PendingCandidates: make([]models.ICECandidateMessage, 0, 256),
-		VideoSlots:        make([]*models.MediaSlot, 0, 10),
-		AudioSlots:        make([]*models.MediaSlot, 0, 10),
+		VideoPool:         pool.NewPool(),
+		AudioPool:         pool.NewPool(),
 	}
 
 	client.Subscriber = subscriber
@@ -381,7 +385,7 @@ func (s *SFU) SendSubscriberOffer(client *models.Client) {
 	client.Subscriber.PC = subscriberPc
 
 	// Pre define transceivers here. 10 for video and 10 for audio.
-	err = s.CreateTranceivers(client)
+	_, err = s.AddTransceivers(client.Subscriber.PC, 10)
 	if err != nil {
 		log.Println("Error creating tranceivers", err)
 		return
