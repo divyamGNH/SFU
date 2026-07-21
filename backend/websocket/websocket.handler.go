@@ -1,9 +1,10 @@
 package websocket
 
 import (
-	"backend/models"
+	"backend/participant"
 	"backend/room"
 	"backend/sfu"
+	"backend/types"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -34,11 +35,9 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Println("[WS] Websocket connected successfully")
 
-	client := &models.Client{
+	client := &participant.Client{
 		Conn:           conn,
 		MidToPublisher: make(map[string]string),
-		// VideoSlots:     make([]*models.MediaSlot, 0, 256),
-		// AudioSlots:     make([]*models.MediaSlot, 0, 256),
 		AudioBool: false,
 		VideoBool: false,
 		Send:      make(chan any, 256),
@@ -63,7 +62,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 		// log.Println("[WS] Raw message received:", string(msg))
 
 		//decode to a base type to understand what kind of msg it is.
-		var base models.BaseMessage
+		var base types.BaseMessage
 
 		// log.Println("[WS] Decoding base message")
 
@@ -79,7 +78,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 
 		case "offer":
 			//handle offer event
-			var signal models.SignalMessage
+			var signal types.SignalMessage
 
 			err := json.Unmarshal(msg, &signal)
 			if err != nil {
@@ -93,7 +92,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 
 		case "ice-candidate":
 			//Handle ice candidate event
-			var iceMessage models.ICECandidateMessage
+			var iceMessage types.ICECandidateMessage
 
 			err := json.Unmarshal(msg, &iceMessage)
 			if err != nil {
@@ -106,7 +105,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 		case "populate-room":
 			// User creates or joins the room he/she is eventually entering the room so only one event to just add the roomId to the client struct
 
-			var createRoomMessage models.PopulateRoomMessage
+			var createRoomMessage types.PopulateRoomMessage
 
 			// Decode the ws message
 			err := json.Unmarshal(msg, &createRoomMessage)
@@ -134,7 +133,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 			// log.Println("[WS] roomId attached to the client successfully")
 
 		case "peer-left":
-			leaveRoomMessage := &models.LeaveRoomSuccessMessage{}
+			leaveRoomMessage := &types.LeaveRoomSuccessMessage{}
 
 			// Decode the ws message
 			err := json.Unmarshal(msg, leaveRoomMessage)
@@ -149,7 +148,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 
 		case "subscriber-answer":
 			log.Printf("Received subscriber answer")
-			answerMsg := &models.SubscriberAnswerMessage{}
+			answerMsg := &types.SubscriberAnswerMessage{}
 
 			err := json.Unmarshal(msg, answerMsg)
 			if err != nil {
@@ -160,7 +159,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 			wh.SFU.HandleSubscriberAnswer(answerMsg, client)
 
 		case "subscriber-ice-candidate":
-			var subscriberIceMessage models.ICECandidateMessage
+			var subscriberIceMessage types.ICECandidateMessage
 
 			err := json.Unmarshal(msg, &subscriberIceMessage)
 			if err != nil {
@@ -171,7 +170,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 			wh.SFU.HandleSubscriberIce(subscriberIceMessage, client)
 
 		case "audio-toggle":
-			var audioToggleMessage models.AudioToggleMessage
+			var audioToggleMessage types.AudioToggleMessage
 
 			err := json.Unmarshal(msg, &audioToggleMessage)
 			if err != nil {
@@ -182,7 +181,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 			wh.SFU.HandleToggleAudio(audioToggleMessage.Muted, client)
 
 		case "video-toggle":
-			var videoToggleMessage models.VideoToggleMessage
+			var videoToggleMessage types.VideoToggleMessage
 
 			err := json.Unmarshal(msg, &videoToggleMessage)
 			if err != nil {

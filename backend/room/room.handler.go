@@ -1,7 +1,8 @@
 package room
 
 import (
-	"backend/models"
+	"backend/participant"
+	"backend/types"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -19,7 +20,7 @@ type RoomHandler struct {
 
 type Room struct {
 	RoomId         string
-	UserIdToClient map[string]*models.Client
+	UserIdToClient map[string]*participant.Client
 	UserIds        []string
 
 	Mu sync.RWMutex
@@ -50,7 +51,7 @@ func (rh *RoomHandler) WriteError(w http.ResponseWriter, message string, statusC
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 
-	err := json.NewEncoder(w).Encode(models.ErrorResponse{
+	err := json.NewEncoder(w).Encode(types.ErrorResponse{
 		Message: message,
 	})
 
@@ -81,7 +82,7 @@ func (rh *RoomHandler) RoomIdForUser(userId string) (string, bool) {
 	return roomId, ok
 }
 
-func (rh *RoomHandler) GetClientFromUserId(userId string) (*models.Client, bool) {
+func (rh *RoomHandler) GetClientFromUserId(userId string) (*participant.Client, bool) {
 	// Get the roomId for this user
 	roomId, ok := rh.RoomIdForUser(userId)
 	if !ok {
@@ -109,7 +110,7 @@ func (rh *RoomHandler) GetClientFromUserId(userId string) (*models.Client, bool)
 	return client, true
 }
 
-func (rh *RoomHandler) GetOtherPeersFromARoom(roomId string, userId string) ([]*models.Client, bool) {
+func (rh *RoomHandler) GetOtherPeersFromARoom(roomId string, userId string) ([]*participant.Client, bool) {
 	//get the room
 	log.Println("Getting peers from the room")
 	room, ok := rh.GetRoom(roomId)
@@ -121,7 +122,7 @@ func (rh *RoomHandler) GetOtherPeersFromARoom(roomId string, userId string) ([]*
 
 	//read the clients map from the room.UserIdToRoomId and return all the users except the userId from the parameters
 
-	var otherUsers []*models.Client
+	var otherUsers []*participant.Client
 	for id, client := range room.UserIdToClient {
 		if id == userId {
 			continue
@@ -163,7 +164,7 @@ func (rh *RoomHandler) ViewRoom(w http.ResponseWriter, r *http.Request) {
 		log.Println(userId)
 	}
 
-	response := models.ViewRoomResponse{
+	response := types.ViewRoomResponse{
 		OtherPeers: otherPeers,
 	}
 
@@ -182,7 +183,7 @@ func (rh *RoomHandler) CreateRoom(w http.ResponseWriter, r *http.Request) {
 
 	room := &Room{
 		RoomId:         roomId,
-		UserIdToClient: make(map[string]*models.Client),
+		UserIdToClient: make(map[string]*participant.Client),
 		UserIds:        []string{},
 	}
 
@@ -199,7 +200,7 @@ func (rh *RoomHandler) CreateRoom(w http.ResponseWriter, r *http.Request) {
 	room.UserIds = append(room.UserIds, clientId)
 	room.Mu.Unlock()
 
-	response := models.CreateRoomResponse{
+	response := types.CreateRoomResponse{
 		RoomId: roomId,
 		UserId: clientId,
 	}
@@ -261,7 +262,7 @@ func (rh *RoomHandler) JoinRoom(w http.ResponseWriter, r *http.Request) {
 	rh.Mu.Unlock()
 
 	// emit the peer-joined event to all the other connected peers in the room.
-	peerJoinedMsg := models.JoinRoomSuccessMessage{
+	peerJoinedMsg := types.JoinRoomSuccessMessage{
 		Type:   "peer-joined",
 		RoomId: roomId,
 		UserId: clientId,
@@ -281,7 +282,7 @@ func (rh *RoomHandler) JoinRoom(w http.ResponseWriter, r *http.Request) {
 
 	room.Mu.RUnlock()
 
-	successMsg := models.JoinRoomResponse{
+	successMsg := types.JoinRoomResponse{
 		RoomId: roomId,
 		UserId: clientId,
 	}
@@ -347,7 +348,7 @@ func (rh *RoomHandler) LeaveRoom(w http.ResponseWriter, r *http.Request) {
 	rh.CleanRoom(roomId)
 
 	// emit the peer-left event to all the remaining connected peers in the room.
-	peerLeftMsg := models.LeaveRoomSuccessMessage{
+	peerLeftMsg := types.LeaveRoomSuccessMessage{
 		Type:   "peer-left",
 		RoomId: roomId,
 		UserId: userId,
@@ -368,7 +369,7 @@ func (rh *RoomHandler) LeaveRoom(w http.ResponseWriter, r *http.Request) {
 	room.Mu.RUnlock()
 
 	//emit the leave-room-success response
-	successMsg := models.LeaveRoomResponse{
+	successMsg := types.LeaveRoomResponse{
 		Message: "Left room successfully",
 	}
 

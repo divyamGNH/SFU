@@ -1,13 +1,13 @@
 package sfu
 
 import (
-	"backend/models"
+	"backend/participant"
 	"log"
 
 	"github.com/pion/webrtc/v3"
 )
 
-func (s *SFU) CleanUpSFU(client *models.Client) {
+func (s *SFU) CleanUpSFU(client *participant.Client) {
 	log.Printf("SFU for client with userId: %v triggered", client.UserId)
 
 	// get client Conn and UserId.

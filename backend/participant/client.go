@@ -1,13 +1,10 @@
-package models
+package participant
 
 import (
 	"log"
 	"sync"
 
-	"backend/sfu/pool"
-
 	"github.com/gorilla/websocket"
-	"github.com/pion/webrtc/v3"
 )
 
 // Use this client struct as later on we dont just need pc we would need userId, roomId etc a lot of things that is why use this struct.
@@ -27,67 +24,6 @@ type Client struct {
 
 	Mu   sync.RWMutex
 	Send chan any
-}
-
-type Publisher struct {
-	PC                *webrtc.PeerConnection
-	RemoteDescSet     bool
-	PendingCandidates []ICECandidateMessage
-	Mu                sync.RWMutex
-}
-
-type Subscriber struct {
-	PC                 *webrtc.PeerConnection
-	RemoteDescSet      bool
-	PendingCandidates  []ICECandidateMessage
-	PendingTransceiver []*webrtc.RTPTransceiver
-	VideoPool          *pool.Pool
-	AudioPool          *pool.Pool
-	Mu                 sync.RWMutex
-}
-
-// Remove the Mutex from here as this value is fully initilized once and then only passed and read from and is never mutated.
-type PublishedTrack struct {
-	PublisherID string
-	TrackID     string
-	StreamID    string
-	SSRC        webrtc.SSRC
-	Kind        webrtc.RTPCodecType
-	LocalTrack  *webrtc.TrackLocalStaticRTP
-
-	Mu sync.RWMutex
-}
-
-func (s *Subscriber) CleanUpSubscriber() {
-
-	// Important to clean up external resources.
-	if s.PC != nil {
-		err := s.PC.Close()
-		if err != nil {
-			log.Println("Error closing Subscriber PC : ", err)
-		}
-		s.PC = nil
-	}
-
-	// Optional to clean up internal resources but better practice and more safe to clean them.
-	s.VideoPool = nil
-	s.AudioPool = nil
-	s.PendingCandidates = nil
-}
-
-func (p *Publisher) CleanUpPublisher() {
-
-	// Important to clean up external resources.
-	if p.PC != nil {
-		err := p.PC.Close()
-		if err != nil {
-			log.Println("Error closing Publisher PC : ", err)
-		}
-		p.PC = nil
-	}
-
-	// Optional to clean up internal resources but better practice and more safe to clean them.
-	p.PendingCandidates = nil
 }
 
 // This clean up only happens when the client leaves not on reconnections as this destroys the PC and connections everything client had with the server.

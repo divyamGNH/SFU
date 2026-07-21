@@ -1,8 +1,9 @@
 package sfu
 
 import (
-	"backend/models"
+	"backend/participant"
 	"backend/sfu/pool"
+	"backend/types"
 	"log"
 
 	"github.com/pion/rtcp"
@@ -10,7 +11,7 @@ import (
 )
 
 // Send the PLI upstream to the owner of the track.
-func (s *SFU) SendPLIToPublisher(publishedTrack *models.PublishedTrack) {
+func (s *SFU) SendPLIToPublisher(publishedTrack *participant.PublishedTrack) {
 	publisherClient, ok := s.rm.GetClientFromUserId(publishedTrack.PublisherID)
 	if !ok {
 		log.Println("[SFU] publisher client not found")
@@ -95,7 +96,7 @@ func (s *SFU) DrainRTCP(slot *pool.MediaSlot) {
 
 // Send video realted media to a single client specified in the function.
 // return bool needNegotiation, bool alreadyPublished, error
-func (s *SFU) PublishVideoStream(client *models.Client, publishedTrack *models.PublishedTrack) (bool, bool, error) {
+func (s *SFU) PublishVideoStream(client *participant.Client, publishedTrack *participant.PublishedTrack) (bool, bool, error) {
 
 	// Get the video pool.
 	videoPool := client.Subscriber.VideoPool
@@ -127,7 +128,7 @@ func (s *SFU) PublishVideoStream(client *models.Client, publishedTrack *models.P
 	}
 
 	// Check if the DrainRTCP is started for this slot or not. If not start it.
-	if !slot.TryStartDrainRTCP() {
+	if slot.TryStartDrainRTCP() {
 		// DrainRTCP already spins up a new go-routine internally.
 		go s.DrainRTCP(slot)
 	}
@@ -136,7 +137,7 @@ func (s *SFU) PublishVideoStream(client *models.Client, publishedTrack *models.P
 	mid := slot.Transceiver.Mid()
 
 	// Create WS msg for sending the MID mapping so the frontend can map which track is from which user.
-	msg := models.PublishMediaMessage{
+	msg := types.PublishMediaMessage{
 		Type:      "media-published",
 		Mid:       mid,
 		Publisher: publishedTrack.PublisherID,
@@ -149,7 +150,7 @@ func (s *SFU) PublishVideoStream(client *models.Client, publishedTrack *models.P
 
 // Send audio related media to a single client specified in the function.
 // return bool needNegotiation, bool alreadyPublished, error
-func (s *SFU) PublishAudioStream(client *models.Client, publishedTrack *models.PublishedTrack) (bool, bool, error) {
+func (s *SFU) PublishAudioStream(client *participant.Client, publishedTrack *participant.PublishedTrack) (bool, bool, error) {
 
 	// Get the audioPool
 	audioPool := client.Subscriber.AudioPool
@@ -176,12 +177,12 @@ func (s *SFU) PublishAudioStream(client *models.Client, publishedTrack *models.P
 	if err != nil {
 		// There was a error replacing the track so free the slot we acquired to prevent slot leakage.
 		client.Subscriber.AudioPool.Release(slot.Index)
-		log.Printf("Error relacing video track : %w", err)
+		log.Printf("Error relacing video track : %v", err)
 		return false, false, err
 	}
 
 	// Check if the DrainRTCP is started for this slot or not. If not start it.
-	if !slot.TryStartDrainRTCP() {
+	if slot.TryStartDrainRTCP() {
 		// DrainRTCP already spins up a new go-routine internally.
 		go s.DrainRTCP(slot)
 	}
@@ -190,7 +191,7 @@ func (s *SFU) PublishAudioStream(client *models.Client, publishedTrack *models.P
 	mid := slot.Transceiver.Mid()
 
 	// Create WS msg for sending the MID mapping so the frontend can map which track is from which user.
-	msg := models.PublishMediaMessage{
+	msg := types.PublishMediaMessage{
 		Type:      "media-published",
 		Mid:       mid,
 		Publisher: publishedTrack.PublisherID,
@@ -201,7 +202,7 @@ func (s *SFU) PublishAudioStream(client *models.Client, publishedTrack *models.P
 	return false, false, nil
 }
 
-func (s *SFU) SendLocalMediaToRemotePeers(client *models.Client) {
+func (s *SFU) SendLocalMediaToRemotePeers(client *participant.Client) {
 	otherPeers, ok := s.rm.GetOtherPeersFromARoom(client.RoomId, client.UserId)
 	if !ok {
 		log.Println("[SFU] Error getting the other peers in the room")
@@ -209,7 +210,7 @@ func (s *SFU) SendLocalMediaToRemotePeers(client *models.Client) {
 	}
 
 	s.mu.RLock()
-	localTracks := append([]*models.PublishedTrack(nil), s.UserIdToPublishedTracks[client.UserId]...)
+	localTracks := append([]*participant.PublishedTrack(nil), s.UserIdToPublishedTracks[client.UserId]...)
 	s.mu.RUnlock()
 
 	for _, peer := range otherPeers {
@@ -261,7 +262,7 @@ func (s *SFU) SendLocalMediaToRemotePeers(client *models.Client) {
 	}
 }
 
-func (s *SFU) SendRemoteMediaToLocalPeer(client *models.Client) {
+func (s *SFU) SendRemoteMediaToLocalPeer(client *participant.Client) {
 	otherPeers, ok := s.rm.GetOtherPeersFromARoom(client.RoomId, client.UserId)
 	if !ok {
 		log.Println("[SFU] Error getting the other peers in the room")

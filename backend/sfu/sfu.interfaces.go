@@ -1,9 +1,9 @@
 package sfu
 
-import "backend/models"
+import "backend/participant"
 
 type RoomManager interface {
 	RoomIdForUser(string) (string, bool)
-	GetClientFromUserId(string) (*models.Client, bool)
-	GetOtherPeersFromARoom(string, string) ([]*models.Client, bool)
+	GetClientFromUserId(string) (*participant.Client, bool)
+	GetOtherPeersFromARoom(string, string) ([]*participant.Client, bool)
 }

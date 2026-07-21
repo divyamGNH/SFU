@@ -3,8 +3,9 @@
 package sfu
 
 import (
-	"backend/models"
+	"backend/participant"
 	"backend/sfu/pool"
+	"backend/types"
 	"log"
 	"sync"
 
@@ -13,9 +14,9 @@ import (
 )
 
 type SFU struct {
-	ConnToClient              map[*websocket.Conn]*models.Client
-	UserIdToPublishedTracks   map[string][]*models.PublishedTrack
-	TrackIdToPublishedTracks  map[string]*models.PublishedTrack
+	ConnToClient              map[*websocket.Conn]*participant.Client
+	UserIdToPublishedTracks   map[string][]*participant.PublishedTrack
+	TrackIdToPublishedTracks  map[string]*participant.PublishedTrack
 	SubscriberToOccupiedSlots map[string][]*pool.MediaSlot
 	rm                        RoomManager
 	mu                        sync.RWMutex
@@ -23,9 +24,9 @@ type SFU struct {
 
 func NewSFU(roomManager RoomManager) *SFU {
 	return &SFU{
-		ConnToClient:              make(map[*websocket.Conn]*models.Client),
-		UserIdToPublishedTracks:   make(map[string][]*models.PublishedTrack),
-		TrackIdToPublishedTracks:  make(map[string]*models.PublishedTrack),
+		ConnToClient:              make(map[*websocket.Conn]*participant.Client),
+		UserIdToPublishedTracks:   make(map[string][]*participant.PublishedTrack),
+		TrackIdToPublishedTracks:  make(map[string]*participant.PublishedTrack),
 		SubscriberToOccupiedSlots: make(map[string][]*pool.MediaSlot),
 		rm:                        roomManager,
 	}
@@ -33,7 +34,7 @@ func NewSFU(roomManager RoomManager) *SFU {
 
 // TODO  : Find a better and a more central place to put this function so that the whole codebase can use it and the code stays production grade.
 // Send the socket message to every peer in the room.
-func (s *SFU) BroadcastMessage(msg any, client *models.Client) {
+func (s *SFU) BroadcastMessage(msg any, client *participant.Client) {
 	roomId := client.RoomId
 	userId := client.UserId
 
@@ -52,7 +53,7 @@ func (s *SFU) BroadcastMessage(msg any, client *models.Client) {
 	}
 }
 
-func (s *SFU) FlushICECandidateQueue(client *models.Client) {
+func (s *SFU) FlushICECandidateQueue(client *participant.Client) {
 	client.Publisher.Mu.Lock()
 
 	if !client.Publisher.RemoteDescSet {
@@ -63,7 +64,7 @@ func (s *SFU) FlushICECandidateQueue(client *models.Client) {
 	}
 
 	// candidate is already of type ICECandidateInit
-	candidates := append([]models.ICECandidateMessage(nil), client.Publisher.PendingCandidates...)
+	candidates := append([]types.ICECandidateMessage(nil), client.Publisher.PendingCandidates...)
 
 	//Empty the queue.
 	client.Publisher.PendingCandidates = nil
@@ -80,7 +81,7 @@ func (s *SFU) FlushICECandidateQueue(client *models.Client) {
 	}
 }
 
-func (s *SFU) FlushSubscriberICECandidateQueue(client *models.Client) {
+func (s *SFU) FlushSubscriberICECandidateQueue(client *participant.Client) {
 	client.Subscriber.Mu.Lock()
 
 	if !client.Subscriber.RemoteDescSet {
@@ -91,7 +92,7 @@ func (s *SFU) FlushSubscriberICECandidateQueue(client *models.Client) {
 	}
 
 	// candidate is already of type ICECandidateInit
-	candidates := append([]models.ICECandidateMessage(nil), client.Subscriber.PendingCandidates...)
+	candidates := append([]types.ICECandidateMessage(nil), client.Subscriber.PendingCandidates...)
 
 	//Empty the queue.
 	client.Subscriber.PendingCandidates = nil
@@ -108,7 +109,7 @@ func (s *SFU) FlushSubscriberICECandidateQueue(client *models.Client) {
 	}
 }
 
-func (s *SFU) HandleOffer(signal models.SignalMessage, conn *websocket.Conn, client *models.Client) {
+func (s *SFU) HandleOffer(signal types.SignalMessage, conn *websocket.Conn, client *participant.Client) {
 
 	log.Println("[SFU] Received offer")
 
@@ -133,10 +134,10 @@ func (s *SFU) HandleOffer(signal models.SignalMessage, conn *websocket.Conn, cli
 	// We already get the client from the WS handler now
 
 	// Add the PC to the client received
-	publisher := &models.Publisher{
+	publisher := &participant.Publisher{
 		PC:                pc,
 		RemoteDescSet:     false,
-		PendingCandidates: make([]models.ICECandidateMessage, 0, 256),
+		PendingCandidates: make([]types.ICECandidateMessage, 0, 256),
 	}
 	client.Publisher = publisher
 
@@ -157,7 +158,7 @@ func (s *SFU) HandleOffer(signal models.SignalMessage, conn *websocket.Conn, cli
 		}
 
 		// Create a publishedTrack instance.
-		publishedTrack := &models.PublishedTrack{
+		publishedTrack := &participant.PublishedTrack{
 			PublisherID: client.UserId,
 			TrackID:     remoteTrack.ID(),
 			StreamID:    remoteTrack.StreamID(),
@@ -233,7 +234,7 @@ func (s *SFU) HandleOffer(signal models.SignalMessage, conn *websocket.Conn, cli
 
 	// log.Println("[SFU] Answer created successfully")
 
-	answer := models.SignalMessage{
+	answer := types.SignalMessage{
 		Type: "answer",
 		SDP:  localSDP,
 	}
@@ -258,7 +259,7 @@ func (s *SFU) HandleOffer(signal models.SignalMessage, conn *websocket.Conn, cli
 		candidateJSON := candidate.ToJSON()
 
 		// Create a object to send to the frontend
-		msg := models.ICECandidateMessage{
+		msg := types.ICECandidateMessage{
 			Type:         "ice-candidate",
 			ICECandidate: candidateJSON,
 		}
@@ -282,7 +283,7 @@ func (s *SFU) HandleOffer(signal models.SignalMessage, conn *websocket.Conn, cli
 }
 
 // Implement a queue to prevent drop of ice candidates as they might arrive before or after the setDescription
-func (s *SFU) HandleICECandidate(candidate models.ICECandidateMessage, client *models.Client) {
+func (s *SFU) HandleICECandidate(candidate types.ICECandidateMessage, client *participant.Client) {
 
 	//candidate is a object that containes Candidate
 	client.Publisher.Mu.Lock()
@@ -301,7 +302,7 @@ func (s *SFU) HandleICECandidate(candidate models.ICECandidateMessage, client *m
 	}
 }
 
-func (s *SFU) HandleSubscriberAnswer(answer *models.SubscriberAnswerMessage, client *models.Client) {
+func (s *SFU) HandleSubscriberAnswer(answer *types.SubscriberAnswerMessage, client *participant.Client) {
 	log.Printf(
 		"Subscriber answer from %s",
 		client.UserId,
@@ -320,14 +321,15 @@ func (s *SFU) HandleSubscriberAnswer(answer *models.SubscriberAnswerMessage, cli
 	client.Subscriber.Mu.Unlock()
 
 	// Get all the tranceivers.
-	s.SetTranceiversAsSlots(client)
+	// Architecture changed. change this to match it.
+	// s.SetTranceiversAsSlots(client)
 
 	// Flush the ICE candidate queue as the remote desc is not set.
 	s.FlushSubscriberICECandidateQueue(client)
 	s.SendRemoteMediaToLocalPeer(client)
 }
 
-func (s *SFU) HandleSubscriberIce(iceMessage models.ICECandidateMessage, client *models.Client) {
+func (s *SFU) HandleSubscriberIce(iceMessage types.ICECandidateMessage, client *participant.Client) {
 
 	if client.Subscriber == nil {
 		log.Println("Client subscriber is nil")
@@ -352,7 +354,7 @@ func (s *SFU) HandleSubscriberIce(iceMessage models.ICECandidateMessage, client 
 	}
 }
 
-func (s *SFU) SendSubscriberOffer(client *models.Client) {
+func (s *SFU) SendSubscriberOffer(client *participant.Client) {
 	log.Println("Subscriber offer triggered")
 	// Create the subscriber pc
 	subscriberPc, err := webrtc.NewPeerConnection(webrtc.Configuration{
@@ -368,10 +370,10 @@ func (s *SFU) SendSubscriberOffer(client *models.Client) {
 		log.Println("[SFU] Error creating subscriber PC : ", err)
 	}
 
-	subscriber := &models.Subscriber{
+	subscriber := &participant.Subscriber{
 		PC:                subscriberPc,
 		RemoteDescSet:     false,
-		PendingCandidates: make([]models.ICECandidateMessage, 0, 256),
+		PendingCandidates: make([]types.ICECandidateMessage, 0, 256),
 		VideoPool:         pool.NewPool(),
 		AudioPool:         pool.NewPool(),
 	}
@@ -401,7 +403,7 @@ func (s *SFU) SendSubscriberOffer(client *models.Client) {
 		candidateJSON := candidate.ToJSON()
 
 		// Create a object to send to the frontend
-		msg := models.ICECandidateMessage{
+		msg := types.ICECandidateMessage{
 			Type:         "subscriber-ice-candidate",
 			ICECandidate: candidateJSON,
 		}
@@ -438,7 +440,7 @@ func (s *SFU) SendSubscriberOffer(client *models.Client) {
 	}
 
 	// Create the ws message.
-	subscriberOfferMsg := &models.SubscriberOfferMessage{
+	subscriberOfferMsg := &types.SubscriberOfferMessage{
 		Type: "subscriber-offer",
 		SDP:  subscriberOffer,
 	}
@@ -447,7 +449,7 @@ func (s *SFU) SendSubscriberOffer(client *models.Client) {
 	client.SafeSend(subscriberOfferMsg)
 }
 
-func (s *SFU) RenegotiateSubscriberOffer(client *models.Client) {
+func (s *SFU) RenegotiateSubscriberOffer(client *participant.Client) {
 	log.Printf(
 		"Sending subscriber offer to %s",
 		client.UserId,
@@ -473,7 +475,7 @@ func (s *SFU) RenegotiateSubscriberOffer(client *models.Client) {
 	log.Printf("local desc set succesfully for re nego")
 
 	// Create the ws message.
-	message := models.SubscriberOfferMessage{
+	message := types.SubscriberOfferMessage{
 		Type: "subscriber-offer",
 		SDP:  reoffer,
 	}
@@ -484,7 +486,7 @@ func (s *SFU) RenegotiateSubscriberOffer(client *models.Client) {
 	log.Printf("subscriber-offer message being sent done")
 }
 
-func (s *SFU) RenegotiateSubscriberAnswer(answer *models.SubscriberAnswerMessage, client *models.Client) {
+func (s *SFU) RenegotiateSubscriberAnswer(answer *types.SubscriberAnswerMessage, client *participant.Client) {
 	reanswer := answer.SDP
 	subscriberPc := client.Subscriber.PC
 
@@ -496,15 +498,16 @@ func (s *SFU) RenegotiateSubscriberAnswer(answer *models.SubscriberAnswerMessage
 	}
 
 	// Set the new transceivers as slots.
-	s.SetTranceiversAsSlots(client)
+	//Architecture changed change this also to match the changes.
+	// s.SetTranceiversAsSlots(client)
 }
 
-func (s *SFU) HandleToggleAudio(muted bool, client *models.Client) {
+func (s *SFU) HandleToggleAudio(muted bool, client *participant.Client) {
 	client.Mu.Lock()
 	client.AudioBool = muted
 	client.Mu.Unlock()
 
-	msg := &models.AudioToggleMessageRes{
+	msg := &types.AudioToggleMessageRes{
 		Type:   "audio-toggle",
 		UserId: client.UserId,
 		Muted:  client.AudioBool,
@@ -514,12 +517,12 @@ func (s *SFU) HandleToggleAudio(muted bool, client *models.Client) {
 	s.BroadcastMessage(msg, client)
 }
 
-func (s *SFU) HandleToggleVideo(muted bool, client *models.Client) {
+func (s *SFU) HandleToggleVideo(muted bool, client *participant.Client) {
 	client.Mu.Lock()
 	client.VideoBool = muted
 	client.Mu.Unlock()
 
-	msg := &models.VideoToggleMessageRes{
+	msg := &types.VideoToggleMessageRes{
 		Type:   "video-toggle",
 		UserId: client.UserId,
 		Muted:  client.VideoBool,
