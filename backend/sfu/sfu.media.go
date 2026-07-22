@@ -290,7 +290,16 @@ func (s *SFU) SendRemoteMediaToLocalPeer(client *participant.Client) {
 				needVideoReNegotiation, alreadyPublished, err := s.PublishVideoStream(client, publishedTrack)
 
 				if needVideoReNegotiation {
-					// Grow logic and debouncing logic here
+					t, err := s.AddTransceiver(client.Subscriber.PC, webrtc.MediaKindVideo)
+
+					if err != nil {
+						log.Printf("Error Adding new transceiver for a new slot : %v", err)
+						continue
+					}
+
+					client.Subscriber.VideoPool.Grow(t)
+
+					s.ReNegotiate()
 				} else if err != nil {
 					log.Printf("Error publishing the videoTrack %v", err)
 				} else if alreadyPublished {
@@ -301,7 +310,16 @@ func (s *SFU) SendRemoteMediaToLocalPeer(client *participant.Client) {
 				needAudioReNegotiation, alreadyPublished, err := s.PublishAudioStream(client, publishedTrack)
 
 				if needAudioReNegotiation {
-					// Grow logic and debouncing logic here
+					t, err := s.AddTransceiver(client.Subscriber.PC, webrtc.MediaKindAudio)
+
+					if err != nil {
+						log.Printf("Error Adding new transceiver for a new slot : %v", err)
+						continue
+					}
+
+					client.Subscriber.AudioPool.Grow(t)
+
+					s.ReNegotiate()
 				} else if err != nil {
 					log.Printf("Error publishing the videoTrack %v", err)
 				} else if alreadyPublished {

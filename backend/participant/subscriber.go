@@ -16,7 +16,8 @@ type Subscriber struct {
 	PendingTransceiver []*webrtc.RTPTransceiver
 	VideoPool          *pool.Pool
 	AudioPool          *pool.Pool
-	Debouncer          *Debouncer
+	VideoDebouncer     *Debouncer
+	AudioDebouncer     *Debouncer
 
 	Mu sync.RWMutex
 }

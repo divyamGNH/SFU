@@ -38,9 +38,9 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 	client := &participant.Client{
 		Conn:           conn,
 		MidToPublisher: make(map[string]string),
-		AudioBool: false,
-		VideoBool: false,
-		Send:      make(chan any, 256),
+		AudioBool:      false,
+		VideoBool:      false,
+		Send:           make(chan any, 256),
 	}
 	// log.Println("[WS] Client created succesfully")
 

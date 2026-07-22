@@ -1,6 +1,8 @@
 package sfu
 
 import (
+	"fmt"
+
 	"github.com/pion/webrtc/v3"
 )
 
@@ -32,6 +34,30 @@ func (s *SFU) AddTransceivers(subscriberPc *webrtc.PeerConnection, n int) ([]*we
 	}
 
 	return out, nil
+}
+
+// create one tranceiver for audio and video each.
+func (s *SFU) AddTransceiver(pc *webrtc.PeerConnection, kind webrtc.MediaKind) (*webrtc.RTPTransceiver, error) {
+
+	var codec webrtc.RTPCodecType
+
+	// Decide video or audio
+	switch kind {
+	case webrtc.MediaKindVideo:
+		codec = webrtc.RTPCodecTypeVideo
+	case webrtc.MediaKindAudio:
+		codec = webrtc.RTPCodecTypeAudio
+	default:
+		return nil, fmt.Errorf("unsupported media kind: %v", kind)
+	}
+
+	// Create the transceiver.
+	return pc.AddTransceiverFromKind(
+		codec,
+		webrtc.RTPTransceiverInit{
+			Direction: webrtc.RTPTransceiverDirectionSendonly,
+		},
+	)
 }
 
 // func (s *SFU) SetTranceiversAsSlots(client *models.Client) {

@@ -6,55 +6,50 @@ import (
 )
 
 type Debouncer struct {
-	pendingVideos int
-	pendingAudios int
-	timer         *time.Timer
-	running       bool
+	pending int
+	timer   *time.Timer
+	onFlush func(n int)
 
 	mu sync.Mutex
 }
 
-func (d *Debouncer) RequestVidio() {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	d.pendingVideos++
-
-	if d.timer != nil {
-		return
+func NewDebouncer(onFlush func(n int)) *Debouncer {
+	return &Debouncer{
+		onFlush: onFlush,
 	}
-
-	d.timer = time.AfterFunc(50*time.Millisecond, d.FlushDebouncer)
 }
 
-func (d *Debouncer) RequestAudio() {
+func (d *Debouncer) Request() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	d.pendingAudios++
+	// Increment the pending.
+	d.pending++
 
+	// Return if the timer already started.
 	if d.timer != nil {
 		return
 	}
 
+	// Start the timer if it was not started.
 	d.timer = time.AfterFunc(50*time.Millisecond, d.FlushDebouncer)
 }
 
 func (d *Debouncer) FlushDebouncer() {
 	d.mu.Lock()
 
-	video := d.pendingVideos
-	audio := d.pendingAudios
+	// Number of tracks waiting that could not find a slot.
+	pending := d.pending
 
 	// Reset the timer.
 	d.timer = nil
 	d.mu.Unlock()
 
 	// Return if no extra slots needed.
-	if video == 0 && audio == 0 {
+	if pending == 0 {
 		return
 	}
 
 	// Call the Grow functions to increase the slots and transceivers.
-
+	d.onFlush(pending)
 }

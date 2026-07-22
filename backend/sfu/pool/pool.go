@@ -59,33 +59,23 @@ func (p *Pool) Release(idx int) {
 }
 
 // Add more transceivers after a short period of debouncing and collecting how many transceivers are needed.
-func (p *Pool) Grow(n int, addTransceiver func(n int) ([]*webrtc.RTPTransceiver, error)) ([]*MediaSlot, error) {
-	// Create the n tranceivers.
-	transceivers, err := addTransceiver(n)
-	if err != nil {
-		return nil, err
-	}
-
+func (p *Pool) Grow(t *webrtc.RTPTransceiver) *MediaSlot {
 	p.Mu.Lock()
 	defer p.Mu.Unlock()
 
 	// Create slots for these transceivers for future use and return the array of slots.
-	out := make([]*MediaSlot, 0, n)
-	for _, t := range transceivers {
-		idx := len(p.Slots)
+	idx := len(p.Slots)
 
-		// ready is false by default.
-		slot := &MediaSlot{
-			Transceiver: t,
-			Index:       idx,
-		}
-
-		p.Slots = append(p.Slots, slot)
-		p.Pending = append(p.Pending, idx)
-		out = append(out, slot)
+	// ready is false by default.
+	slot := &MediaSlot{
+		Transceiver: t,
+		Index:       idx,
 	}
 
-	return out, nil
+	p.Slots = append(p.Slots, slot)
+	p.Pending = append(p.Pending, idx)
+
+	return slot
 }
 
 // Slots slice contains all the newSlots created in the related Grow() call.
