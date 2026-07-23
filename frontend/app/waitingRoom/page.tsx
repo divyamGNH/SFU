@@ -779,20 +779,18 @@ export default function WaitingPage() {
 
       // TODO : Currently we are seperating the user manually later implement auth and remove the user in the backend itself and get the userId from the token
       const peers = Array.isArray(response.otherPeers)
-        ? response.otherPeers.filter((peerId: string) => peerId !== userId)
+        ? response.otherPeers.filter((peer) => peer.userId !== userId)
         : [];
 
-      setOtherPeers(peers);
+      setOtherPeers(peers.map(p => p.userId));
       setPeerMediaState((prev) => {
         const nextState = { ...prev };
 
-        for (const peerId of peers) {
-          if (!nextState[peerId]) {
-            nextState[peerId] = {
-              audioMuted: false,
-              videoMuted: false,
-            };
-          }
+        for (const peer of peers) {
+          nextState[peer.userId] = {
+            audioMuted: peer.audioBool,
+            videoMuted: peer.videoBool,
+          };
         }
 
         return nextState;

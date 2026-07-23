@@ -175,20 +175,24 @@ func (rh *RoomHandler) ViewRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// log.Println(clientId)
-	var otherPeers []string
+	var otherPeers []types.PeerState
 	room.Mu.RLock()
-	for userId := range room.UserIdToClient {
-		// if userId == clientId {
+	for _, client := range room.UserIdToClient {
+		// if client.UserId == clientId {
 		// 	continue
 		// }
-		otherPeers = append(otherPeers, userId)
+		
+		client.Mu.RLock()
+		state := types.PeerState{
+			UserId:    client.UserId,
+			AudioBool: client.AudioBool,
+			VideoBool: client.VideoBool,
+		}
+		client.Mu.RUnlock()
+		
+		otherPeers = append(otherPeers, state)
 	}
 	room.Mu.RUnlock()
-
-	for userId := range otherPeers {
-		log.Println(userId)
-	}
 
 	response := types.ViewRoomResponse{
 		OtherPeers: otherPeers,
@@ -213,6 +217,7 @@ func (rh *RoomHandler) CreateRoom(w http.ResponseWriter, r *http.Request) {
 		UserIds:                  []string{},
 		UserIdToPublishedTracks:  make(map[string][]*participant.PublishedTrack),
 		TrackIdToPublishedTracks: make(map[string]*participant.PublishedTrack),
+		TrackIdToReceiver:        make(map[string]*sfu.Receiver),
 	}
 
 	// Add roomId -> room
@@ -559,6 +564,8 @@ func (rh *RoomHandler) RemoveClient(roomId string, userId string) {
 
 	room.Mu.Lock()
 
+	client, clientExists := room.UserIdToClient[userId]
+
 	for i, id := range room.UserIds {
 		if id == userId {
 			room.UserIds = append(room.UserIds[:i], room.UserIds[i+1:]...)
@@ -577,6 +584,17 @@ func (rh *RoomHandler) RemoveClient(roomId string, userId string) {
 	}
 
 	room.Mu.Unlock()
+
+	// Send a peer-left ws message.
+	peerLeftMsg := types.LeaveRoomSuccessMessage{
+		Type:   "peer-left",
+		RoomId: roomId,
+		UserId: userId,
+	}
+
+	if clientExists {
+		rh.BroadcastMessage(peerLeftMsg, client)
+	}
 
 	rh.Mu.Lock()
 	delete(rh.UserIdToRoomId, userId)

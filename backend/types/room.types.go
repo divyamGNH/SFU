@@ -16,8 +16,14 @@ type LeaveRoomResponse struct {
 	Message string `json:"message"`
 }
 
+type PeerState struct {
+	UserId    string `json:"userId"`
+	AudioBool bool   `json:"audioBool"`
+	VideoBool bool   `json:"videoBool"`
+}
+
 type ViewRoomResponse struct {
-	OtherPeers []string `json:"otherPeers"`
+	OtherPeers []PeerState `json:"otherPeers"`
 }
 
 type ErrorResponse struct {

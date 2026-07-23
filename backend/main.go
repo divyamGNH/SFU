@@ -57,13 +57,13 @@ func main() {
 	}
 
 	router := mux.NewRouter()
-
 	setupRoutes(router, wsHandler, roomHandler)
 
+	// Enable CORS.
 	handler := enableCORS(router)
 
+	// Start the server.
 	err := http.ListenAndServe(":8080", handler)
-
 	if err != nil {
 		log.Fatal("Could not start the HTTP server")
 	}
