@@ -22,6 +22,17 @@ type WsHandler struct {
 	RoomHandler *room.RoomHandler
 }
 
+func (wh *WsHandler) CompleteCleanup(client *participant.Client) {
+	log.Printf("[WS] Tab closed! Cleaning up user: %s", client.UserId)
+
+	// 1. Utilize your existing Client/Publisher/Subscriber cleanup!
+	client.CleanUpClient()
+	// 2. Utilize our new helper to remove them from the room
+	if client.RoomId != "" && client.UserId != "" {
+		wh.RoomHandler.RemoveClient(client.RoomId, client.UserId)
+	}
+}
+
 func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println("[WS] Received websocket upgrade request")
 
@@ -39,6 +50,8 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 		VideoBool:      false,
 		Send:           make(chan any, 256),
 	}
+
+	defer wh.CompleteCleanup(client)
 
 	iceServers := config.FetchICEServers()
 	// Initialize Publisher (and pass the RoomHandler's callback)
@@ -147,18 +160,11 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 			wh.RoomHandler.SendRemoteMediaToLocalPeer(client)
 
 		case "peer-left":
-			leaveRoomMessage := &types.LeaveRoomSuccessMessage{}
-
-			// Decode the ws message
-			err := json.Unmarshal(msg, leaveRoomMessage)
-			if err != nil {
-				log.Println("[WS] Error decoding join-room message:", err)
-				return
-			}
-
-			// wh.SFU.CleanUpSFU(client)
-			//TODO : Handle cleanup here.
-			// wh.RoomHandler.LeaveRoom()
+			// If the frontend explicitly sends a peer-left websocket event,
+			// we can just break the loop as this triggers the defer block at the top,
+			// which automatically does CompleteCleanup.
+			log.Printf("[WS] Client %s explicitly requested to leave", client.UserId)
+			return
 
 		case "subscriber-answer":
 			log.Printf("Received subscriber answer")

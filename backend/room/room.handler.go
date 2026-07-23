@@ -332,50 +332,16 @@ func (rh *RoomHandler) LeaveRoom(w http.ResponseWriter, r *http.Request) {
 	roomId := vars["roomId"]
 	userId := vars["clientId"]
 
-	//Check if the room even exists or not
+	// Check if the room even exists or not
 	room, ok := rh.GetRoom(roomId)
 	if !ok {
 		rh.WriteError(w, "No such room with this roomId exists", http.StatusNotFound)
 		return
 	}
 
-	//delete the client from the room
-	room.Mu.Lock()
+	rh.RemoveClient(roomId, userId)
 
-	// Check if the userId sent by the frontend actually exists before cleaning this up.
-	found := false
-	for _, id := range room.UserIds {
-		if id == userId {
-			found = true
-			break
-		}
-	}
-
-	if !found {
-		room.Mu.Unlock()
-
-		rh.WriteError(w, "User is not a member of this room", http.StatusNotFound)
-		return
-	}
-
-	delete(room.UserIdToClient, userId)
-
-	for i, id := range room.UserIds {
-		if id == userId {
-			room.UserIds = append(room.UserIds[:i], room.UserIds[i+1:]...)
-			break
-		}
-	}
-
-	room.Mu.Unlock()
-
-	rh.Mu.Lock()
-	delete(rh.UserIdToRoomId, userId)
-	rh.Mu.Unlock()
-
-	rh.CleanRoom(roomId)
-
-	// emit the peer-left event to all the remaining connected peers in the room.
+	// Emit the peer-left event to all the remaining connected peers in the room.
 	peerLeftMsg := types.LeaveRoomSuccessMessage{
 		Type:   "peer-left",
 		RoomId: roomId,
@@ -386,7 +352,7 @@ func (rh *RoomHandler) LeaveRoom(w http.ResponseWriter, r *http.Request) {
 
 	for id, client := range room.UserIdToClient {
 
-		// do not emit the event to the leaving user itself
+		// Do not emit the event to the leaving user itself
 		if id == userId {
 			continue
 		}
@@ -396,37 +362,12 @@ func (rh *RoomHandler) LeaveRoom(w http.ResponseWriter, r *http.Request) {
 
 	room.Mu.RUnlock()
 
-	//emit the leave-room-success response
+	// Emit the leave-room-success response
 	successMsg := types.LeaveRoomResponse{
 		Message: "Left room successfully",
 	}
 
 	rh.WriteJSON(w, successMsg, http.StatusOK)
-}
-
-// Handle all the cleanup
-func (rh *RoomHandler) CleanRoom(roomId string) {
-	//first check if the room has any users left or not
-	room, ok := rh.GetRoom(roomId)
-	if !ok {
-		log.Println("Room with this roomid does not exist")
-		return
-	}
-
-	room.Mu.RLock()
-	isEmpty := len(room.UserIds) == 0
-	room.Mu.RUnlock()
-
-	if !isEmpty {
-		log.Println("This room still has clients can not clean it")
-		return
-	}
-
-	rh.Mu.Lock()
-	delete(rh.RoomIdToRoom, roomId)
-	rh.Mu.Unlock()
-
-	log.Printf("[Room] Room with roomid : %v has been deleted", roomId)
 }
 
 func (r *Room) AddPublishedTracks(track *participant.PublishedTrack, receiver *sfu.Receiver) {
@@ -582,4 +523,64 @@ func (rh *RoomHandler) SendRemoteMediaToLocalPeer(client *participant.Client) {
 			}
 		}
 	}
+}
+
+// Handle all the cleanup
+func (rh *RoomHandler) CleanRoom(roomId string) {
+	//first check if the room has any users left or not
+	room, ok := rh.GetRoom(roomId)
+	if !ok {
+		log.Println("Room with this roomid does not exist")
+		return
+	}
+
+	room.Mu.RLock()
+	isEmpty := len(room.UserIds) == 0
+	room.Mu.RUnlock()
+
+	if !isEmpty {
+		log.Println("This room still has clients can not clean it")
+		return
+	}
+
+	rh.Mu.Lock()
+	delete(rh.RoomIdToRoom, roomId)
+	rh.Mu.Unlock()
+
+	log.Printf("[Room] Room with roomid : %v has been deleted", roomId)
+}
+
+func (rh *RoomHandler) RemoveClient(roomId string, userId string) {
+	// Get the room
+	room, ok := rh.GetRoom(roomId)
+	if !ok {
+		return
+	}
+
+	room.Mu.Lock()
+
+	for i, id := range room.UserIds {
+		if id == userId {
+			room.UserIds = append(room.UserIds[:i], room.UserIds[i+1:]...)
+			break
+		}
+	}
+
+	delete(room.UserIdToClient, userId)
+
+	if tracks, exists := room.UserIdToPublishedTracks[userId]; exists {
+		for _, track := range tracks {
+			delete(room.TrackIdToPublishedTracks, track.TrackID)
+			delete(room.TrackIdToReceiver, track.TrackID)
+		}
+		delete(room.UserIdToPublishedTracks, userId)
+	}
+
+	room.Mu.Unlock()
+
+	rh.Mu.Lock()
+	delete(rh.UserIdToRoomId, userId)
+	rh.Mu.Unlock()
+
+	rh.CleanRoom(roomId)
 }
