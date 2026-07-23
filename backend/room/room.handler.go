@@ -3,7 +3,6 @@ package room
 import (
 	"backend/participant"
 	"backend/sfu"
-	"backend/sfu/pool"
 	"backend/types"
 	"encoding/json"
 	"log"
@@ -12,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
-	"github.com/pion/webrtc/v3"
 )
 
 type RoomHandler struct {
@@ -431,12 +429,12 @@ func (rh *RoomHandler) CleanRoom(roomId string) {
 	log.Printf("[Room] Room with roomid : %v has been deleted", roomId)
 }
 
-func (r *Room) AddPublishedTracks(track *participant.PublishedTrack) {
+func (r *Room) AddPublishedTracks(track *participant.PublishedTrack, receiver *sfu.Receiver) {
 	r.Mu.Lock()
 
 	r.UserIdToPublishedTracks[track.PublisherID] = append(r.UserIdToPublishedTracks[track.PublisherID], track)
-
 	r.TrackIdToPublishedTracks[track.TrackID] = track
+	r.TrackIdToReceiver[track.TrackID] = receiver
 
 	r.Mu.Unlock()
 }
@@ -448,17 +446,9 @@ func (rh *RoomHandler) OnTrackPublished(track *participant.PublishedTrack, clien
 		return
 	}
 
-	receiver := sfu.NewReceiver(track.RemoteTrack, track.LocalTrack, client.Publisher.PC)
+	receiver := sfu.NewReceiver(track.RemoteTrack, track.LocalTrack, client.Publisher)
 
-	room.Mu.Lock()
-
-	room.UserIdToPublishedTracks[track.PublisherID] = append(room.UserIdToPublishedTracks[track.PublisherID], track)
-	room.TrackIdToPublishedTracks[track.TrackID] = track
-	room.TrackIdToReceiver[track.TrackID] = receiver
-
-	room.Mu.Unlock()
-
-	room.AddPublishedTracks(track)
+	room.AddPublishedTracks(track, receiver)
 }
 
 func (rh *RoomHandler) HandleToggleAudio(muted bool, client *participant.Client) {
@@ -492,32 +482,10 @@ func (rh *RoomHandler) HandleToggleVideo(muted bool, client *participant.Client)
 }
 
 func (rh *RoomHandler) publishTrackToSubscriber(subscriber *participant.Client, track *participant.PublishedTrack) (bool, bool, error) {
-	var trackPool *pool.Pool
+	needsNegotiation, alreadyPublished, slot, err := subscriber.Subscriber.SubscribeToTrack(track)
 
-	// Find which pool does the track belong to.
-	if track.Kind == webrtc.RTPCodecTypeVideo {
-		trackPool = subscriber.Subscriber.VideoPool
-	} else {
-		trackPool = subscriber.Subscriber.AudioPool
-	}
-
-	// Check if the track is already published or not. Return if yes.
-	if trackPool.ContainsTrack(track.PublisherID, track.TrackID) {
-		return false, true, nil
-	}
-
-	// Acquire a slot.
-	slot, _, _, ok := trackPool.Acquire(track.PublisherID, track.TrackID, track.Kind)
-	if !ok {
-		// Needs negotiation
-		return true, false, nil
-	}
-
-	// Replace the track from the slot.
-	err := slot.Transceiver.Sender().ReplaceTrack(track.LocalTrack)
-	if err != nil {
-		trackPool.Release(slot.Index)
-		return false, false, err
+	if needsNegotiation || alreadyPublished || err != nil {
+		return needsNegotiation, alreadyPublished, err
 	}
 
 	// Get the room.
@@ -571,16 +539,8 @@ func (rh *RoomHandler) SendLocalMediaToRemotePeers(client *participant.Client) {
 			if needNegotiation {
 				// Trigger Subscriber grow
 				kind := localTrack.Kind
-				t, err := peer.Subscriber.AddTransceiver(kind)
+				err := peer.Subscriber.GrowPool(kind)
 				if err == nil {
-					// Grow the slot according to the media.
-					if kind == webrtc.RTPCodecTypeVideo {
-						peer.Subscriber.VideoPool.Grow(t)
-					} else {
-						peer.Subscriber.AudioPool.Grow(t)
-					}
-
-					// Negotiate the increased slot.
 					peer.Subscriber.RequestNegotiate()
 				}
 			} else if err != nil {
@@ -613,16 +573,8 @@ func (rh *RoomHandler) SendRemoteMediaToLocalPeer(client *participant.Client) {
 			needNegotiation, _, err := rh.publishTrackToSubscriber(client, publishedTrack)
 			if needNegotiation {
 				kind := publishedTrack.Kind
-				t, err := client.Subscriber.AddTransceiver(kind)
+				err := client.Subscriber.GrowPool(kind)
 				if err == nil {
-					// Grow the slots according to media type.
-					if kind == webrtc.RTPCodecTypeVideo {
-						client.Subscriber.VideoPool.Grow(t)
-					} else {
-						client.Subscriber.AudioPool.Grow(t)
-					}
-
-					// Negotiate the new slots.
 					client.Subscriber.RequestNegotiate()
 				}
 			} else if err != nil {

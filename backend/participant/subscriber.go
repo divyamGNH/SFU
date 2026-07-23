@@ -126,12 +126,14 @@ func (s *Subscriber) createAndSendOffer() {
 	if err != nil {
 		log.Println("[Subscriber] Error creating offer:", err)
 		s.clearNegotiating()
+		s.CleanUpSubscriber()
 		return
 	}
 
 	if err := subPC.SetLocalDescription(offer); err != nil {
 		log.Println("[Subscriber] Error setting local description:", err)
 		s.clearNegotiating()
+		s.CleanUpSubscriber()
 		return
 	}
 
@@ -171,7 +173,7 @@ func (s *Subscriber) FlushICECandidateQueue() {
 		err := s.PC.AddICECandidate(candidate.ICECandidate)
 		if err != nil {
 			log.Println("[HandleICECandidate] Error adding subscriber ICE candidate to the queue:", err)
-			return
+			continue
 		}
 	}
 }
@@ -235,7 +237,6 @@ func (s *Subscriber) HandleIce(iceMessage types.ICECandidateMessage) {
 }
 
 func (s *Subscriber) AddTransceiver(kind webrtc.RTPCodecType) (*webrtc.RTPTransceiver, error) {
-
 	pc := s.PC
 
 	// Create the transceiver.
@@ -245,6 +246,53 @@ func (s *Subscriber) AddTransceiver(kind webrtc.RTPCodecType) (*webrtc.RTPTransc
 			Direction: webrtc.RTPTransceiverDirectionSendonly,
 		},
 	)
+}
+
+func (s *Subscriber) GrowPool(kind webrtc.RTPCodecType) error {
+	t, err := s.AddTransceiver(kind)
+	if err != nil {
+		return err
+	}
+
+	if kind == webrtc.RTPCodecTypeVideo {
+		s.VideoPool.Grow(t)
+	} else {
+		s.AudioPool.Grow(t)
+	}
+
+	return nil
+}
+
+func (s *Subscriber) SubscribeToTrack(track *PublishedTrack) (bool, bool, *pool.MediaSlot, error) {
+	var trackPool *pool.Pool
+
+	// Find which pool does the track belong to.
+	if track.Kind == webrtc.RTPCodecTypeVideo {
+		trackPool = s.VideoPool
+	} else {
+		trackPool = s.AudioPool
+	}
+
+	// Check if the track is already published or not. Return if yes.
+	if trackPool.ContainsTrack(track.PublisherID, track.TrackID) {
+		return false, true, nil, nil
+	}
+
+	// Acquire a slot.
+	slot, _, _, ok := trackPool.Acquire(track.PublisherID, track.TrackID, track.Kind)
+	if !ok {
+		// Needs negotiation
+		return true, false, nil, nil
+	}
+
+	// Replace the track from the slot.
+	err := slot.Transceiver.Sender().ReplaceTrack(track.LocalTrack)
+	if err != nil {
+		trackPool.Release(slot.Index)
+		return false, false, nil, err
+	}
+
+	return false, false, slot, nil
 }
 
 func (s *Subscriber) CleanUpSubscriber() {

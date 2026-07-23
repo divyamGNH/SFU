@@ -7,23 +7,18 @@ import (
 	"github.com/pion/webrtc/v3"
 )
 
-// the actual WriteRTCP function needs a PC so basically a call looks like publisher.PC.WriteRTCP but to prevent coupling we inject that function in the sfu.
-type RTCPWriter interface {
-	WriteRTCP(packets []rtcp.Packet) error
-}
-
 type Receiver struct {
 	trackRemote *webrtc.TrackRemote
 	localTrack  *webrtc.TrackLocalStaticRTP
-	rtcpWriter  RTCPWriter
+	writeRTCP   func(packets []rtcp.Packet) error
 	done        chan struct{}
 }
 
-func NewReceiver(trackRemote *webrtc.TrackRemote, localTrack *webrtc.TrackLocalStaticRTP, writer RTCPWriter) *Receiver {
+func NewReceiver(trackRemote *webrtc.TrackRemote, localTrack *webrtc.TrackLocalStaticRTP, writeRTCP func(packets []rtcp.Packet) error) *Receiver {
 	r := &Receiver{
 		trackRemote: trackRemote,
 		localTrack:  localTrack,
-		rtcpWriter:  writer,
+		writeRTCP:   writeRTCP,
 		done:        make(chan struct{}),
 	}
 
@@ -64,7 +59,7 @@ func (r *Receiver) start() {
 // Sending the PLI request upstream.
 // trackRemote is the track we receive from the frontend basically SFU says that hey client this is the track u sent me another client needs a I-frame for this.
 func (r *Receiver) SendPLI() {
-	err := r.rtcpWriter.WriteRTCP([]rtcp.Packet{
+	err := r.writeRTCP([]rtcp.Packet{
 		&rtcp.PictureLossIndication{
 			MediaSSRC: uint32(r.trackRemote.SSRC()),
 		},

@@ -6,6 +6,7 @@ import (
 	"log"
 	"sync"
 
+	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v3"
 )
 
@@ -17,6 +18,11 @@ type Publisher struct {
 	callbacks         PublisherCallbacks
 
 	Mu sync.RWMutex
+}
+
+// WriteRTCP allows Publisher to implement sfu.RTCPWriter without exposing the raw PC
+func (p *Publisher) WriteRTCP(packets []rtcp.Packet) error {
+	return p.PC.WriteRTCP(packets)
 }
 
 // All the callback functions are required so none of them must be nil.
@@ -131,7 +137,7 @@ func (p *Publisher) FlushICECandidateQueue() {
 		err := p.PC.AddICECandidate(candidate.ICECandidate)
 		if err != nil {
 			log.Println("[HandleICECandidate] Error adding ICE candidate to the queue:", err)
-			return
+			continue
 		}
 	}
 }

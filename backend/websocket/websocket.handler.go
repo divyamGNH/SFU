@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"backend/config"
 	"backend/participant"
 	"backend/room"
 	"backend/types"
@@ -38,6 +39,32 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 		VideoBool:      false,
 		Send:           make(chan any, 256),
 	}
+
+	iceServers := config.FetchICEServers()
+	// Initialize Publisher (and pass the RoomHandler's callback)
+	publisher, err := participant.NewPublisher(
+		iceServers,
+		participant.PublisherCallbacks{
+			OnTrackPublished: wh.RoomHandler.OnTrackPublished,
+		},
+		client,
+	)
+	if err != nil {
+		log.Println("[WS] Error creating publisher:", err)
+		return
+	}
+	client.Publisher = publisher
+	// Initialize Subscriber
+	subscriber, err := participant.NewSubscriber(
+		iceServers,
+		participant.SubscriberCallbacks{},
+		client,
+	)
+	if err != nil {
+		log.Println("[WS] Error creating subscriber:", err)
+		return
+	}
+	client.Subscriber = subscriber
 
 	go client.WritePump()
 
@@ -116,6 +143,8 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 			room.Mu.Unlock()
 
 			// log.Println("[WS] roomId attached to the client successfully")
+
+			wh.RoomHandler.SendRemoteMediaToLocalPeer(client)
 
 		case "peer-left":
 			leaveRoomMessage := &types.LeaveRoomSuccessMessage{}
