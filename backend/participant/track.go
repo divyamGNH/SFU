@@ -14,6 +14,7 @@ type PublishedTrack struct {
 	SSRC        webrtc.SSRC
 	Kind        webrtc.RTPCodecType
 	LocalTrack  *webrtc.TrackLocalStaticRTP
+	RemoteTrack *webrtc.TrackRemote
 
 	Mu sync.RWMutex
 }

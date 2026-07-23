@@ -215,6 +215,38 @@ func (s *Subscriber) HandleAnswer(answer *types.SubscriberAnswerMessage) error {
 	return nil
 }
 
+func (s *Subscriber) HandleIce(iceMessage types.ICECandidateMessage) {
+	s.Mu.Lock()
+	if s == nil || s.PC == nil || !s.RemoteDescSet {
+		s.PendingCandidates = append(s.PendingCandidates, iceMessage)
+		s.Mu.Unlock()
+		return
+	}
+
+	subscriberPc := s.PC
+	iceCandidate := iceMessage.ICECandidate
+	s.Mu.Unlock()
+
+	err := subscriberPc.AddICECandidate(iceCandidate)
+	if err != nil {
+		log.Println("Error adding ice candidate on the subscriber PC : ", err)
+		return
+	}
+}
+
+func (s *Subscriber) AddTransceiver(kind webrtc.RTPCodecType) (*webrtc.RTPTransceiver, error) {
+
+	pc := s.PC
+
+	// Create the transceiver.
+	return pc.AddTransceiverFromKind(
+		kind,
+		webrtc.RTPTransceiverInit{
+			Direction: webrtc.RTPTransceiverDirectionSendonly,
+		},
+	)
+}
+
 func (s *Subscriber) CleanUpSubscriber() {
 
 	// Important to clean up external resources.

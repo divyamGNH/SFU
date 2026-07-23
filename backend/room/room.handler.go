@@ -2,6 +2,8 @@ package room
 
 import (
 	"backend/participant"
+	"backend/sfu"
+	"backend/sfu/pool"
 	"backend/types"
 	"encoding/json"
 	"log"
@@ -10,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"github.com/pion/webrtc/v3"
 )
 
 type RoomHandler struct {
@@ -24,6 +27,7 @@ type Room struct {
 	UserIds                  []string
 	UserIdToPublishedTracks  map[string][]*participant.PublishedTrack
 	TrackIdToPublishedTracks map[string]*participant.PublishedTrack
+	TrackIdToReceiver        map[string]*sfu.Receiver
 
 	Mu sync.RWMutex
 }
@@ -439,11 +443,20 @@ func (r *Room) AddPublishedTracks(track *participant.PublishedTrack) {
 
 func (rh *RoomHandler) OnTrackPublished(track *participant.PublishedTrack, client *participant.Client) {
 	room, ok := rh.GetRoom(client.RoomId)
-
 	if !ok {
 		log.Println("[RoomHandler] Error: Room not found for OnTrack")
 		return
 	}
+
+	receiver := sfu.NewReceiver(track.RemoteTrack, track.LocalTrack, client.Publisher.PC)
+
+	room.Mu.Lock()
+
+	room.UserIdToPublishedTracks[track.PublisherID] = append(room.UserIdToPublishedTracks[track.PublisherID], track)
+	room.TrackIdToPublishedTracks[track.TrackID] = track
+	room.TrackIdToReceiver[track.TrackID] = receiver
+
+	room.Mu.Unlock()
 
 	room.AddPublishedTracks(track)
 }
@@ -476,4 +489,145 @@ func (rh *RoomHandler) HandleToggleVideo(muted bool, client *participant.Client)
 
 	// Send a event to the other peers in the room so that they can update their UI.
 	rh.BroadcastMessage(msg, client)
+}
+
+func (rh *RoomHandler) publishTrackToSubscriber(subscriber *participant.Client, track *participant.PublishedTrack) (bool, bool, error) {
+	var trackPool *pool.Pool
+
+	// Find which pool does the track belong to.
+	if track.Kind == webrtc.RTPCodecTypeVideo {
+		trackPool = subscriber.Subscriber.VideoPool
+	} else {
+		trackPool = subscriber.Subscriber.AudioPool
+	}
+
+	// Check if the track is already published or not. Return if yes.
+	if trackPool.ContainsTrack(track.PublisherID, track.TrackID) {
+		return false, true, nil
+	}
+
+	// Acquire a slot.
+	slot, _, _, ok := trackPool.Acquire(track.PublisherID, track.TrackID, track.Kind)
+	if !ok {
+		// Needs negotiation
+		return true, false, nil
+	}
+
+	// Replace the track from the slot.
+	err := slot.Transceiver.Sender().ReplaceTrack(track.LocalTrack)
+	if err != nil {
+		trackPool.Release(slot.Index)
+		return false, false, err
+	}
+
+	// Get the room.
+	room, _ := rh.GetRoom(subscriber.RoomId)
+
+	// Look up the receiver from the room state
+	room.Mu.RLock()
+	rx := room.TrackIdToReceiver[track.TrackID]
+	room.Mu.RUnlock()
+
+	// Start the RTCPDrain if not started already.
+	if rx != nil && slot.TryStartDrainRTCP() {
+		fwd := sfu.NewForwarder(rx, slot.Transceiver.Sender())
+		// Start a new go-routine for draining the RTCP.
+		go fwd.DrainRTCP()
+	}
+
+	// Send the MID mapping to the frontend.
+	msg := types.PublishMediaMessage{
+		Type:      "media-published",
+		Mid:       slot.Transceiver.Mid(),
+		Publisher: track.PublisherID,
+	}
+	subscriber.SafeSend(msg)
+
+	return false, false, nil
+}
+
+func (rh *RoomHandler) SendLocalMediaToRemotePeers(client *participant.Client) {
+	// Get the other peers.
+	otherPeers, ok := rh.GetOtherPeersFromARoom(client.RoomId, client.UserId)
+	if !ok {
+		return
+	}
+
+	// Get the room.
+	room, ok := rh.GetRoom(client.RoomId)
+	if !ok {
+		return
+	}
+
+	// Get the localTracks.
+	room.Mu.RLock()
+	localTracks := append([]*participant.PublishedTrack(nil), room.UserIdToPublishedTracks[client.UserId]...)
+	room.Mu.RUnlock()
+
+	// Send each localTrack to each remotePeer in the room.
+	for _, peer := range otherPeers {
+		for _, localTrack := range localTracks {
+			needNegotiation, _, err := rh.publishTrackToSubscriber(peer, localTrack)
+			if needNegotiation {
+				// Trigger Subscriber grow
+				kind := localTrack.Kind
+				t, err := peer.Subscriber.AddTransceiver(kind)
+				if err == nil {
+					// Grow the slot according to the media.
+					if kind == webrtc.RTPCodecTypeVideo {
+						peer.Subscriber.VideoPool.Grow(t)
+					} else {
+						peer.Subscriber.AudioPool.Grow(t)
+					}
+
+					// Negotiate the increased slot.
+					peer.Subscriber.RequestNegotiate()
+				}
+			} else if err != nil {
+				log.Println("[RoomHandler] Error publishing stream:", err)
+			}
+		}
+	}
+}
+
+func (rh *RoomHandler) SendRemoteMediaToLocalPeer(client *participant.Client) {
+	// Get the other peers in the room.
+	otherPeers, ok := rh.GetOtherPeersFromARoom(client.RoomId, client.UserId)
+	if !ok {
+		return
+	}
+
+	// Get the room.
+	room, ok := rh.GetRoom(client.RoomId)
+	if !ok {
+		return
+	}
+
+	// Send each remote peers each track to the local peer.
+	for _, peer := range otherPeers {
+		room.Mu.RLock()
+		tracks := room.UserIdToPublishedTracks[peer.UserId]
+		room.Mu.RUnlock()
+
+		for _, publishedTrack := range tracks {
+			needNegotiation, _, err := rh.publishTrackToSubscriber(client, publishedTrack)
+			if needNegotiation {
+				kind := publishedTrack.Kind
+				t, err := client.Subscriber.AddTransceiver(kind)
+				if err == nil {
+					// Grow the slots according to media type.
+					if kind == webrtc.RTPCodecTypeVideo {
+						client.Subscriber.VideoPool.Grow(t)
+					} else {
+						client.Subscriber.AudioPool.Grow(t)
+					}
+
+					// Negotiate the new slots.
+					client.Subscriber.RequestNegotiate()
+				}
+			} else if err != nil {
+				log.Println("[RoomHandler] Error publishing stream:", err)
+			}
+		}
+	}
 }

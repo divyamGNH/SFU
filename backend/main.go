@@ -5,7 +5,6 @@ import (
 	"net/http"
 
 	"backend/room"
-	"backend/sfu"
 	"backend/websocket"
 
 	"github.com/gorilla/mux"
@@ -53,10 +52,7 @@ func main() {
 
 	roomHandler := room.NewRoomHandler()
 
-	sfuInstance := sfu.NewSFU(roomHandler)
-
 	wsHandler := &websocket.WsHandler{
-		SFU:         sfuInstance,
 		RoomHandler: roomHandler,
 	}
 

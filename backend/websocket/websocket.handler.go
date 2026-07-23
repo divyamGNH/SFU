@@ -3,7 +3,6 @@ package websocket
 import (
 	"backend/participant"
 	"backend/room"
-	"backend/sfu"
 	"backend/types"
 	"encoding/json"
 	"log"
@@ -19,7 +18,6 @@ var upgrader = websocket.Upgrader{
 }
 
 type WsHandler struct {
-	SFU         *sfu.SFU
 	RoomHandler *room.RoomHandler
 }
 
@@ -33,8 +31,6 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Println("[WS] Websocket connected successfully")
-
 	client := &participant.Client{
 		Conn:           conn,
 		MidToPublisher: make(map[string]string),
@@ -42,16 +38,11 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 		VideoBool:      false,
 		Send:           make(chan any, 256),
 	}
-	// log.Println("[WS] Client created succesfully")
 
 	go client.WritePump()
-	// log.Println("[HandleOffer] WritePump started")
 
 	//The backend must listen for the WS events continously so we run a infinite for loop.
 	for {
-
-		// log.Println("[WS] Waiting for websocket message")
-
 		//We get msgType, msg and the err but we are not handlng the msgType right now hence we put a _ for now
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
@@ -59,20 +50,14 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
-		// log.Println("[WS] Raw message received:", string(msg))
-
 		//decode to a base type to understand what kind of msg it is.
 		var base types.BaseMessage
-
-		// log.Println("[WS] Decoding base message")
 
 		err = json.Unmarshal(msg, &base)
 		if err != nil {
 			log.Println("[WS] Error decoding base message:", err)
 			continue
 		}
-
-		// log.Println("[WS] Message type:", base.Type)
 
 		switch base.Type {
 
@@ -86,7 +71,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
-			wh.SFU.HandleOffer(signal, conn, client)
+			client.Publisher.HandleOffer(signal)
 
 			// log.Println("[WS] Finished SFU.HandleOffer")
 
@@ -100,7 +85,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
-			wh.SFU.HandleICECandidate(iceMessage, client)
+			client.Publisher.HandleICECandidate(iceMessage, client)
 
 		case "populate-room":
 			// User creates or joins the room he/she is eventually entering the room so only one event to just add the roomId to the client struct
@@ -142,7 +127,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			wh.SFU.CleanUpSFU(client)
+			// wh.SFU.CleanUpSFU(client)
 			//TODO : Handle cleanup here.
 			// wh.RoomHandler.LeaveRoom()
 
@@ -156,7 +141,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			wh.SFU.HandleSubscriberAnswer(answerMsg, client)
+			client.Subscriber.HandleAnswer(answerMsg)
 
 		case "subscriber-ice-candidate":
 			var subscriberIceMessage types.ICECandidateMessage
@@ -167,7 +152,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			wh.SFU.HandleSubscriberIce(subscriberIceMessage, client)
+			client.Subscriber.HandleIce(subscriberIceMessage)
 
 		case "audio-toggle":
 			var audioToggleMessage types.AudioToggleMessage
@@ -178,7 +163,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			wh.SFU.HandleToggleAudio(audioToggleMessage.Muted, client)
+			wh.RoomHandler.HandleToggleAudio(audioToggleMessage.Muted, client)
 
 		case "video-toggle":
 			var videoToggleMessage types.VideoToggleMessage
@@ -189,7 +174,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			wh.SFU.HandleToggleVideo(videoToggleMessage.Muted, client)
+			wh.RoomHandler.HandleToggleVideo(videoToggleMessage.Muted, client)
 
 		default:
 			log.Println("[WS] Unknown message type received:", base.Type)

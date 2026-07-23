@@ -71,6 +71,7 @@ func NewPublisher(iceServers []webrtc.ICEServer, callbacks PublisherCallbacks, c
 			SSRC:        track.SSRC(),
 			Kind:        track.Kind(),
 			LocalTrack:  localTrack,
+			RemoteTrack: track,
 		}
 
 		p.callbacks.OnTrackPublished(publishedTrack, p.client)
@@ -135,7 +136,7 @@ func (p *Publisher) FlushICECandidateQueue() {
 	}
 }
 
-func (p *Publisher) HandleOffer(signal types.SignalMessage, client *Client) (webrtc.SessionDescription, error) {
+func (p *Publisher) HandleOffer(signal types.SignalMessage) (webrtc.SessionDescription, error) {
 	pc := p.PC
 
 	//Set up the received remote SDP
