@@ -19,9 +19,11 @@ type RoomHandler struct {
 }
 
 type Room struct {
-	RoomId         string
-	UserIdToClient map[string]*participant.Client
-	UserIds        []string
+	RoomId                   string
+	UserIdToClient           map[string]*participant.Client
+	UserIds                  []string
+	UserIdToPublishedTracks  map[string][]*participant.PublishedTrack
+	TrackIdToPublishedTracks map[string]*participant.PublishedTrack
 
 	Mu sync.RWMutex
 }
@@ -35,6 +37,25 @@ func NewRoomHandler() *RoomHandler {
 }
 
 //Helper functions.
+
+func (rh *RoomHandler) BroadcastMessage(msg any, client *participant.Client) {
+	roomId := client.RoomId
+	userId := client.UserId
+
+	// Get other peers from the room
+	otherPeers, ok := rh.GetOtherPeersFromARoom(roomId, userId)
+	if !ok {
+		log.Printf("Error braodcasting socket event roomId : %s and userId : %s", roomId, userId)
+		return
+	}
+
+	for _, peer := range otherPeers {
+		ok := peer.SafeSend(msg)
+		if !ok {
+			log.Printf("Error sending the broadcast message to peer : %s from cliendId : %s", peer.UserId, userId)
+		}
+	}
+}
 
 func (rh *RoomHandler) WriteJSON(w http.ResponseWriter, message any, statusCode int) {
 	w.Header().Set("Content-Type", "application/json")
@@ -123,12 +144,15 @@ func (rh *RoomHandler) GetOtherPeersFromARoom(roomId string, userId string) ([]*
 	//read the clients map from the room.UserIdToRoomId and return all the users except the userId from the parameters
 
 	var otherUsers []*participant.Client
+
+	room.Mu.Lock()
 	for id, client := range room.UserIdToClient {
 		if id == userId {
 			continue
 		}
 		otherUsers = append(otherUsers, client)
 	}
+	room.Mu.Unlock()
 
 	return otherUsers, true
 }
@@ -182,9 +206,11 @@ func (rh *RoomHandler) CreateRoom(w http.ResponseWriter, r *http.Request) {
 	roomId := rh.RoomIdGenerator()
 
 	room := &Room{
-		RoomId:         roomId,
-		UserIdToClient: make(map[string]*participant.Client),
-		UserIds:        []string{},
+		RoomId:                   roomId,
+		UserIdToClient:           make(map[string]*participant.Client),
+		UserIds:                  []string{},
+		UserIdToPublishedTracks:  make(map[string][]*participant.PublishedTrack),
+		TrackIdToPublishedTracks: make(map[string]*participant.PublishedTrack),
 	}
 
 	// Add roomId -> room
@@ -399,4 +425,55 @@ func (rh *RoomHandler) CleanRoom(roomId string) {
 	rh.Mu.Unlock()
 
 	log.Printf("[Room] Room with roomid : %v has been deleted", roomId)
+}
+
+func (r *Room) AddPublishedTracks(track *participant.PublishedTrack) {
+	r.Mu.Lock()
+
+	r.UserIdToPublishedTracks[track.PublisherID] = append(r.UserIdToPublishedTracks[track.PublisherID], track)
+
+	r.TrackIdToPublishedTracks[track.TrackID] = track
+
+	r.Mu.Unlock()
+}
+
+func (rh *RoomHandler) OnTrackPublished(track *participant.PublishedTrack, client *participant.Client) {
+	room, ok := rh.GetRoom(client.RoomId)
+
+	if !ok {
+		log.Println("[RoomHandler] Error: Room not found for OnTrack")
+		return
+	}
+
+	room.AddPublishedTracks(track)
+}
+
+func (rh *RoomHandler) HandleToggleAudio(muted bool, client *participant.Client) {
+	client.Mu.Lock()
+	client.AudioBool = muted
+	client.Mu.Unlock()
+
+	msg := &types.AudioToggleMessageRes{
+		Type:   "audio-toggle",
+		UserId: client.UserId,
+		Muted:  client.AudioBool,
+	}
+
+	// Send a event to the other peers in the room so that they can update their UI.
+	rh.BroadcastMessage(msg, client)
+}
+
+func (rh *RoomHandler) HandleToggleVideo(muted bool, client *participant.Client) {
+	client.Mu.Lock()
+	client.VideoBool = muted
+	client.Mu.Unlock()
+
+	msg := &types.VideoToggleMessageRes{
+		Type:   "video-toggle",
+		UserId: client.UserId,
+		Muted:  client.VideoBool,
+	}
+
+	// Send a event to the other peers in the room so that they can update their UI.
+	rh.BroadcastMessage(msg, client)
 }

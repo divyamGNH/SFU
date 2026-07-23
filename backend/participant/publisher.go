@@ -1,40 +1,110 @@
 package participant
 
 import (
-	"backend/config"
 	"backend/types"
+	"fmt"
 	"log"
 	"sync"
 
-	"github.com/gorilla/websocket"
 	"github.com/pion/webrtc/v3"
 )
 
 type Publisher struct {
 	PC                *webrtc.PeerConnection
+	client            *Client
 	RemoteDescSet     bool
 	PendingCandidates []types.ICECandidateMessage
-	handler           TransportHandler
+	callbacks         PublisherCallbacks
 
 	Mu sync.RWMutex
 }
 
-func NewPublisher(handler TransportHandler) (*Publisher, error) {
-	iceServers := config.FetchICEServers()
-	pcConfig := &PcConfig{
-		iceServers: iceServers,
+// All the callback functions are required so none of them must be nil.
+func validatePublisherCallbacks(callbacks PublisherCallbacks) error {
+	if callbacks.OnTrackPublished == nil {
+		return fmt.Errorf("participant: OnTrackPublished callback is required")
 	}
-	pc, err := NewPeerConnection(pcConfig)
 
+	return nil
+}
+
+// Pass the ice server from wherever we call NewPublisher and NewSubscriber.
+func NewPublisher(iceServers []webrtc.ICEServer, callbacks PublisherCallbacks, client *Client) (*Publisher, error) {
+	err := validatePublisherCallbacks(callbacks)
 	if err != nil {
 		return nil, err
 	}
 
-	return &Publisher{
+	pc, err := NewPeerConnection(&PcConfig{iceServers: iceServers})
+	if err != nil {
+		return nil, err
+	}
+
+	p := &Publisher{
 		PC:                pc,
+		client:            client,
+		RemoteDescSet:     false,
 		PendingCandidates: make([]types.ICECandidateMessage, 0),
-		handler:           handler,
-	}, nil
+		callbacks:         callbacks,
+	}
+
+	//Set up pc events onTrack, onICECandidates, onConnectionStateChange
+	pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
+		log.Println("[Publisher] Received new media track")
+
+		localTrack, err := webrtc.NewTrackLocalStaticRTP(
+			track.Codec().RTPCodecCapability,
+			track.ID(),
+			track.StreamID(),
+		)
+
+		if err != nil {
+			log.Println("[Publisher] Error creating localTrack:", err)
+			return
+		}
+
+		// Create a publishedTrack instance.
+		publishedTrack := &PublishedTrack{
+			PublisherID: p.client.UserId,
+			TrackID:     track.ID(),
+			StreamID:    track.StreamID(),
+			SSRC:        track.SSRC(),
+			Kind:        track.Kind(),
+			LocalTrack:  localTrack,
+		}
+
+		p.callbacks.OnTrackPublished(publishedTrack, p.client)
+	})
+
+	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
+		log.Println("[Publisher] Connection state is:", state)
+		//implement cleanup and re connection logic here
+	})
+
+	pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
+		log.Println("[Publisher] ICE state is:", state)
+	})
+
+	pc.OnICECandidate(func(candidate *webrtc.ICECandidate) {
+
+		if candidate == nil {
+			return
+		}
+
+		//Convert webrtc.ICECandidate to webrtc.ICECandidateInit
+		candidateJSON := candidate.ToJSON()
+
+		// Create a object to send to the frontend
+		msg := types.ICECandidateMessage{
+			Type:         "ice-candidate",
+			ICECandidate: candidateJSON,
+		}
+
+		// Emit a socket event for frontend to catch this ice candidate
+		p.client.SafeSend(msg)
+	})
+
+	return p, nil
 }
 
 func (p *Publisher) FlushICECandidateQueue() {
@@ -65,43 +135,29 @@ func (p *Publisher) FlushICECandidateQueue() {
 	}
 }
 
-func (p *Publisher) HandleOffer(signal types.SignalMessage, conn *websocket.Conn, client *Client) (webrtc.SessionDescription, error) {
+func (p *Publisher) HandleOffer(signal types.SignalMessage, client *Client) (webrtc.SessionDescription, error) {
 	pc := p.PC
-
-	//Set up pc events onTrack, onICECandidates, onConnectionStateChange
-	pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
-		p.handler.OnTrack(track, receiver, client)
-	})
-
-	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
-		log.Println("[SFU] Connection state is:", state)
-		//implement cleanup and re connection logic here
-	})
-
-	pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
-		log.Println("[SFU] ICE state is:", state)
-	})
 
 	//Set up the received remote SDP
 	//trickle ice is started as soon i set any description local or remote
 	err := pc.SetRemoteDescription(signal.SDP)
 	if err != nil {
-		log.Println("[SFU] Error setting remote description:", err)
+		log.Println("[Publisher] Error setting remote description:", err)
 		pc.Close()
 		return webrtc.SessionDescription{}, err
 	}
 
 	// Set the boolean true so that we can start flushing the ice candidate queue.
-	client.Publisher.Mu.Lock()
-	client.Publisher.RemoteDescSet = true
-	client.Publisher.Mu.Unlock()
+	p.Mu.Lock()
+	p.RemoteDescSet = true
+	p.Mu.Unlock()
 
 	p.FlushICECandidateQueue()
 
 	//Create answer
 	answer, err := pc.CreateAnswer(nil)
 	if err != nil {
-		log.Println("[SFU] Error creating answer:", err)
+		log.Println("[Publisher] Error creating answer:", err)
 		pc.Close()
 		return webrtc.SessionDescription{}, err
 	}
@@ -109,29 +165,10 @@ func (p *Publisher) HandleOffer(signal types.SignalMessage, conn *websocket.Conn
 	//Set up local description
 	err = pc.SetLocalDescription(answer)
 	if err != nil {
-		log.Println("[SFU] Error setting local description:", err)
+		log.Println("[Publisher] Error setting local description:", err)
 		pc.Close()
-		return webrtc.SessionDescription{}, nil
+		return webrtc.SessionDescription{}, err
 	}
-
-	pc.OnICECandidate(func(candidate *webrtc.ICECandidate) {
-
-		if candidate == nil {
-			return
-		}
-
-		//Convert webrtc.ICECandidate to webrtc.ICECandidateInit
-		candidateJSON := candidate.ToJSON()
-
-		// Create a object to send to the frontend
-		msg := types.ICECandidateMessage{
-			Type:         "ice-candidate",
-			ICECandidate: candidateJSON,
-		}
-
-		// Emit a socket event for frontend to catch this ice candidate
-		client.SafeSend(msg)
-	})
 
 	return answer, nil
 }
@@ -140,18 +177,18 @@ func (p *Publisher) HandleOffer(signal types.SignalMessage, conn *websocket.Conn
 func (p *Publisher) HandleICECandidate(candidate types.ICECandidateMessage, client *Client) {
 
 	//candidate is a object that containes Candidate
-	client.Publisher.Mu.Lock()
+	p.Mu.Lock()
 
-	if !client.Publisher.RemoteDescSet {
-		client.Publisher.PendingCandidates = append(client.Publisher.PendingCandidates, candidate)
-		client.Publisher.Mu.Unlock()
+	if !p.RemoteDescSet {
+		p.PendingCandidates = append(p.PendingCandidates, candidate)
+		p.Mu.Unlock()
 		return
 	}
-	client.Publisher.Mu.Unlock()
+	p.Mu.Unlock()
 
-	err := client.Publisher.PC.AddICECandidate(candidate.ICECandidate)
+	err := p.PC.AddICECandidate(candidate.ICECandidate)
 	if err != nil {
-		log.Println("[SFU] Error adding ICE candidate to the queue:", err)
+		log.Println("[Publisher] Error adding ICE candidate to the queue:", err)
 		return
 	}
 }

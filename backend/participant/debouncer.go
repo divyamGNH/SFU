@@ -5,51 +5,24 @@ import (
 	"time"
 )
 
+// A generic, payload-free trailing debounce — this can replace whatever
+// count-based Debouncer you had, since there's no longer a count to carry.
 type Debouncer struct {
-	pending int
-	timer   *time.Timer
-	onFlush func(n int)
-
-	mu sync.Mutex
+	mu    sync.Mutex
+	timer *time.Timer
+	delay time.Duration
+	fn    func()
 }
 
-func NewDebouncer(onFlush func(n int)) *Debouncer {
-	return &Debouncer{
-		onFlush: onFlush,
-	}
+func NewDebouncer(delay time.Duration, fn func()) *Debouncer {
+	return &Debouncer{delay: delay, fn: fn}
 }
 
-func (d *Debouncer) Request() {
+func (d *Debouncer) Fire() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-
-	// Increment the pending.
-	d.pending++
-
-	// Return if the timer already started.
 	if d.timer != nil {
-		return
+		d.timer.Stop()
 	}
-
-	// Start the timer if it was not started.
-	d.timer = time.AfterFunc(50*time.Millisecond, d.FlushDebouncer)
-}
-
-func (d *Debouncer) FlushDebouncer() {
-	d.mu.Lock()
-
-	// Number of tracks waiting that could not find a slot.
-	pending := d.pending
-
-	// Reset the timer.
-	d.timer = nil
-	d.mu.Unlock()
-
-	// Return if no extra slots needed.
-	if pending == 0 {
-		return
-	}
-
-	// Call the Grow functions to increase the slots and transceivers.
-	d.onFlush(pending)
+	d.timer = time.AfterFunc(d.delay, d.fn)
 }
