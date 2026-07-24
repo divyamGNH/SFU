@@ -59,7 +59,7 @@ func (p *Pool) Release(idx int) {
 }
 
 // Add more transceivers after a short period of debouncing and collecting how many transceivers are needed.
-func (p *Pool) Grow(t *webrtc.RTPTransceiver) *MediaSlot {
+func (p *Pool) Grow(t *webrtc.RTPTransceiver, generation uint64) *MediaSlot {
 	p.Mu.Lock()
 	defer p.Mu.Unlock()
 
@@ -68,8 +68,9 @@ func (p *Pool) Grow(t *webrtc.RTPTransceiver) *MediaSlot {
 
 	// ready is false by default.
 	slot := &MediaSlot{
-		Transceiver: t,
-		Index:       idx,
+		Transceiver:           t,
+		Index:                 idx,
+		NegotiationGeneration: generation,
 	}
 
 	p.Slots = append(p.Slots, slot)
@@ -78,33 +79,28 @@ func (p *Pool) Grow(t *webrtc.RTPTransceiver) *MediaSlot {
 	return slot
 }
 
-// Slots slice contains all the newSlots created in the related Grow() call.
-// We pass slots and don't just traverse the Pending array as another routine can call Grow() and modify more slots in the pending array but I should not activate those with the first Grow call as they both have different renegotiation cycles.
-func (p *Pool) ActivatePendingSlots(slots []*MediaSlot) {
+// ActivateGeneration activates the pending slots that were added during the specified negotiation generation,
+// but only if WebRTC confirms they were successfully negotiated (Mid() != "").
+func (p *Pool) ActivateGeneration(generation uint64) {
 	p.Mu.Lock()
 	defer p.Mu.Unlock()
-
-	// Add the pending slots for this current grow call in a map.
-	activationBatch := make(map[int]struct{}, len(slots))
-	for _, s := range slots {
-		activationBatch[s.Index] = struct{}{}
-	}
 
 	// Reuse Pending's backing array with length 0.
 	remaining := p.Pending[:0]
 
 	// Traverse the actual pending array.
 	for _, idx := range p.Pending {
-
-		// If the slot is not in the map then it does not belong to this Grow call that we are currently processing else push in the remaining array.
-		if _, ok := activationBatch[idx]; !ok {
+		slot := p.Slots[idx]
+		
+		// If the slot belongs to this generation AND has been successfully negotiated in WebRTC
+		if slot.NegotiationGeneration == generation && slot.Transceiver.Mid() != "" {
+			// Activate the slot and push in the free array.
+			slot.Activate()
+			p.Free = append(p.Free, idx)
+		} else {
+			// Keep in pending (either wrong generation, or failed negotiation)
 			remaining = append(remaining, idx)
-			continue
 		}
-
-		// Activate the slot and push in the free array.
-		p.Slots[idx].Activate()
-		p.Free = append(p.Free, idx)
 	}
 
 	// Update the pending array to only the remaining unactivated slots.

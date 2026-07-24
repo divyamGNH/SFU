@@ -6,4 +6,5 @@ type PublisherCallbacks struct {
 }
 
 type SubscriberCallbacks struct {
+	OnNegotiationCompleted func(client *Client)
 }

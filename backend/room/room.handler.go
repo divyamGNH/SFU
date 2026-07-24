@@ -181,7 +181,7 @@ func (rh *RoomHandler) ViewRoom(w http.ResponseWriter, r *http.Request) {
 		// if client.UserId == clientId {
 		// 	continue
 		// }
-		
+
 		client.Mu.RLock()
 		state := types.PeerState{
 			UserId:    client.UserId,
@@ -189,7 +189,7 @@ func (rh *RoomHandler) ViewRoom(w http.ResponseWriter, r *http.Request) {
 			VideoBool: client.VideoBool,
 		}
 		client.Mu.RUnlock()
-		
+
 		otherPeers = append(otherPeers, state)
 	}
 	room.Mu.RUnlock()
@@ -395,6 +395,9 @@ func (rh *RoomHandler) OnTrackPublished(track *participant.PublishedTrack, clien
 	receiver := sfu.NewReceiver(track.RemoteTrack, track.LocalTrack, client.Publisher)
 
 	room.AddPublishedTracks(track, receiver)
+
+	// Broadcast the newly published track to all other peers in the room
+	rh.SendLocalMediaToRemotePeers(client)
 }
 
 func (rh *RoomHandler) HandleToggleAudio(muted bool, client *participant.Client) {
@@ -601,4 +604,10 @@ func (rh *RoomHandler) RemoveClient(roomId string, userId string) {
 	rh.Mu.Unlock()
 
 	rh.CleanRoom(roomId)
+}
+
+// OnNegotiationCompleted is called when a subscriber finishes its WebRTC offer/answer negotiation.
+// We trigger SendRemoteMediaToLocalPeer to retry publishing any tracks that were blocked waiting for a transceiver.
+func (rh *RoomHandler) OnNegotiationCompleted(client *participant.Client) {
+	rh.SendRemoteMediaToLocalPeer(client)
 }

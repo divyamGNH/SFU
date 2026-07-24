@@ -70,7 +70,9 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 	// Initialize Subscriber
 	subscriber, err := participant.NewSubscriber(
 		iceServers,
-		participant.SubscriberCallbacks{},
+		participant.SubscriberCallbacks{
+			OnNegotiationCompleted: wh.RoomHandler.OnNegotiationCompleted,
+		},
 		client,
 	)
 	if err != nil {
@@ -111,9 +113,19 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
-			client.Publisher.HandleOffer(signal)
+			log.Println("[WS] Received 'offer' from client:", client.UserId)
+			answer, err := client.Publisher.HandleOffer(signal)
+			if err != nil {
+				log.Println("[WS] Error handling offer:", err)
+				continue
+			}
 
-			// log.Println("[WS] Finished SFU.HandleOffer")
+			// Send the answer.
+			answerMsg := types.SignalMessage{
+				Type: "answer",
+				SDP:  answer,
+			}
+			client.SafeSend(answerMsg)
 
 		case "ice-candidate":
 			//Handle ice candidate event
@@ -125,6 +137,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
+			log.Println("[WS] Received 'ice-candidate' from client:", client.UserId)
 			client.Publisher.HandleICECandidate(iceMessage, client)
 
 		case "populate-room":
@@ -167,7 +180,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 			return
 
 		case "subscriber-answer":
-			log.Printf("Received subscriber answer")
+			log.Printf("[WS] Received 'subscriber-answer' from client: %s", client.UserId)
 			answerMsg := &types.SubscriberAnswerMessage{}
 
 			err := json.Unmarshal(msg, answerMsg)
@@ -187,6 +200,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
+			log.Printf("[WS] Received 'subscriber-ice-candidate' from client: %s", client.UserId)
 			client.Subscriber.HandleIce(subscriberIceMessage)
 
 		case "audio-toggle":

@@ -3,6 +3,7 @@ package participant
 import (
 	"backend/sfu/pool"
 	"backend/types"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -15,7 +16,8 @@ type Subscriber struct {
 	client             *Client
 	RemoteDescSet      bool
 	PendingCandidates  []types.ICECandidateMessage
-	PendingTransceiver []*webrtc.RTPTransceiver
+	currentGeneration  uint64
+	inflightGeneration uint64
 	VideoPool          *pool.Pool
 	AudioPool          *pool.Pool
 	callbacks          SubscriberCallbacks
@@ -32,6 +34,10 @@ type Subscriber struct {
 
 // All the callback functions are required so none of them must be nil.
 func validateSubscriberCallbacks(callbacks SubscriberCallbacks) error {
+	if callbacks.OnNegotiationCompleted == nil {
+		return fmt.Errorf("participant: OnTrackPublished callback is required")
+	}
+
 	return nil
 }
 
@@ -50,13 +56,15 @@ func NewSubscriber(iceServers []webrtc.ICEServer, callbacks SubscriberCallbacks,
 	}
 
 	sub := &Subscriber{
-		PC:                pc,
-		client:            client,
-		RemoteDescSet:     false,
-		PendingCandidates: make([]types.ICECandidateMessage, 0, 256),
-		VideoPool:         pool.NewPool(),
-		AudioPool:         pool.NewPool(),
-		callbacks:         callbacks,
+		PC:                 pc,
+		client:             client,
+		RemoteDescSet:      false,
+		PendingCandidates:  make([]types.ICECandidateMessage, 0, 256),
+		currentGeneration:  1,
+		inflightGeneration: 1,
+		VideoPool:          pool.NewPool(),
+		AudioPool:          pool.NewPool(),
+		callbacks:          callbacks,
 	}
 
 	// Set the negotiating debouncer.
@@ -121,6 +129,11 @@ func (s *Subscriber) negotiate() {
 
 func (s *Subscriber) createAndSendOffer() {
 	subPC := s.PC
+
+	// Snapshot the current generation for this inflight offer
+	s.inflightGeneration = s.currentGeneration
+	// Increment generation so new GrowPool calls batch into the next generation
+	s.currentGeneration++
 
 	offer, err := subPC.CreateOffer(nil)
 	if err != nil {
@@ -193,9 +206,11 @@ func (s *Subscriber) HandleAnswer(answer *types.SubscriberAnswerMessage) error {
 	s.RemoteDescSet = true
 	s.Mu.Unlock()
 
-	// Get all the tranceivers.
-	// Architecture changed. change this to match it.
-	// s.SetTranceiversAsSlots(client)
+	s.VideoPool.ActivateGeneration(s.inflightGeneration)
+	s.AudioPool.ActivateGeneration(s.inflightGeneration)
+
+	// Set negotiation complete to notify the room handler to retry the track it couldnt send before Growing the pool.
+	s.callbacks.OnNegotiationCompleted(s.client)
 
 	// Flush the ICE candidate queue as the remote desc is not set.
 	s.FlushICECandidateQueue()
@@ -255,9 +270,9 @@ func (s *Subscriber) GrowPool(kind webrtc.RTPCodecType) error {
 	}
 
 	if kind == webrtc.RTPCodecTypeVideo {
-		s.VideoPool.Grow(t)
+		s.VideoPool.Grow(t, s.currentGeneration)
 	} else {
-		s.AudioPool.Grow(t)
+		s.AudioPool.Grow(t, s.currentGeneration)
 	}
 
 	return nil
@@ -303,7 +318,9 @@ func (s *Subscriber) CleanUpSubscriber() {
 		if err != nil {
 			log.Println("Error closing Subscriber PC : ", err)
 		}
-		s.PC = nil
+
+		// We are not nulling the PC here is because there can be some other go-routines can be using this PC so just Close it and the garbage collector will clean up the PC once the publisher goes out of scope and all the routines die down.
+		// s.PC = nil
 	}
 
 	// Optional to clean up internal resources but better practice and more safe to clean them.

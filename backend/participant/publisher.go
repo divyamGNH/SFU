@@ -119,18 +119,17 @@ func (p *Publisher) FlushICECandidateQueue() {
 
 	if !p.RemoteDescSet {
 		p.Mu.Unlock()
-
 		log.Println("[Publisher] Remote Description not set yet. Cannot flush the ICE Candidate queue.")
 		return
 	}
 
-	// candidate is already of type ICECandidateInit
 	candidates := append([]types.ICECandidateMessage(nil), p.PendingCandidates...)
 
 	//Empty the queue.
 	p.PendingCandidates = nil
-
 	p.Mu.Unlock()
+
+	log.Printf("[Publisher] Flushing %d pending ICE candidates", len(candidates))
 
 	for _, candidate := range candidates {
 		//Add the Ice candidate to the queue and wait for the remote description to set.
@@ -139,6 +138,7 @@ func (p *Publisher) FlushICECandidateQueue() {
 			log.Println("[HandleICECandidate] Error adding ICE candidate to the queue:", err)
 			continue
 		}
+		log.Println("[Publisher] Successfully added queued ICE candidate")
 	}
 }
 
@@ -180,13 +180,13 @@ func (p *Publisher) HandleOffer(signal types.SignalMessage) (webrtc.SessionDescr
 	return answer, nil
 }
 
-// Implement a queue to prevent drop of ice candidates as they might arrive before or after the setDescription
 func (p *Publisher) HandleICECandidate(candidate types.ICECandidateMessage, client *Client) {
-
-	//candidate is a object that containes Candidate
 	p.Mu.Lock()
 
+	log.Printf("[Publisher] Received ICE candidate: %+v", candidate.ICECandidate)
+
 	if !p.RemoteDescSet {
+		log.Println("[Publisher] Remote description not set yet, queuing candidate")
 		p.PendingCandidates = append(p.PendingCandidates, candidate)
 		p.Mu.Unlock()
 		return
@@ -195,9 +195,10 @@ func (p *Publisher) HandleICECandidate(candidate types.ICECandidateMessage, clie
 
 	err := p.PC.AddICECandidate(candidate.ICECandidate)
 	if err != nil {
-		log.Println("[Publisher] Error adding ICE candidate to the queue:", err)
+		log.Println("[Publisher] Error adding ICE candidate to the PC:", err)
 		return
 	}
+	log.Println("[Publisher] Successfully added ICE candidate directly")
 }
 
 func (p *Publisher) CleanUpPublisher() {
@@ -208,7 +209,9 @@ func (p *Publisher) CleanUpPublisher() {
 		if err != nil {
 			log.Println("Error closing Publisher PC : ", err)
 		}
-		p.PC = nil
+
+		// We are not nulling the PC here is because there can be some other go-routines can be using this PC so just Close it and the garbage collector will clean up the PC once the publisher goes out of scope and all the routines die down.
+		// p.PC = nil
 	}
 
 	// Optional to clean up internal resources but better practice and more safe to clean them.

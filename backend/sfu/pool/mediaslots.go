@@ -22,8 +22,9 @@ type SlotState struct {
 // state has a atomic pointer to slotState and slotState itself does not have any Mutex or Atomic.
 // ready is a bool whihc is set true once the transceiver of the slot is stable that is only after the renegotiation is complete and the remoteSDP is set. Untill then it says in a deactivated state and can not be Acquired or Assigned
 type MediaSlot struct {
-	Transceiver *webrtc.RTPTransceiver
-	Index       int
+	Transceiver           *webrtc.RTPTransceiver
+	Index                 int
+	NegotiationGeneration uint64
 
 	// This ready is currently redundant as we use a free and a pending slice and only ever loop up the free slice while acquiring.
 	ready            atomic.Bool // Decides if a slot is ready to be Acquired/Assigned or not. False by default
