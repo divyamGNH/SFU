@@ -1,7 +1,7 @@
 package sfu
 
 import (
-	"log"
+	"backend/logger"
 
 	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v3"
@@ -27,31 +27,31 @@ func (f *Forwarder) DrainRTCP() {
 	for {
 		n, _, err := f.sender.Read(rtcpBuf)
 		if err != nil {
-			log.Println("[SFU/Forwarder] error reading RTCP sender closed:", err)
+			logger.Error("[SFU/Forwarder] error reading RTCP sender closed:", err)
 			return
 		}
 
 		packets, err := rtcp.Unmarshal(rtcpBuf[:n])
 		if err != nil {
-			log.Println("[SFU/Forwarder] error unmarshalling rtcp:", err)
+			logger.Error("[SFU/Forwarder] error unmarshalling rtcp:", err)
 			return
 		}
 
 		for _, packet := range packets {
 			switch packet.(type) {
 			case *rtcp.PictureLossIndication:
-				log.Println("[SFU] PLI received.")
+				logger.Info("[SFU] PLI received.")
 				f.source.SendPLI()
 
 			case *rtcp.FullIntraRequest:
-				log.Println("[SFU] FIR received")
+				logger.Info("[SFU] FIR received")
 				f.source.SendPLI()
 
 			case *rtcp.TransportLayerNack:
-				log.Println("[SFU] Transport layer NACK received")
+				logger.Info("[SFU] Transport layer NACK received")
 
 			case *rtcp.ReceiverReport:
-				// log.Println("[SFU] Receviver Report received")
+				// logger.Info("[SFU] Receviver Report received")
 			}
 		}
 	}

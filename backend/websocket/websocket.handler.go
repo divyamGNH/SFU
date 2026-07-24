@@ -6,7 +6,7 @@ import (
 	"backend/room"
 	"backend/types"
 	"encoding/json"
-	"log"
+	"backend/logger"
 	"net/http"
 
 	"github.com/gorilla/websocket"
@@ -23,7 +23,7 @@ type WsHandler struct {
 }
 
 func (wh *WsHandler) CompleteCleanup(client *participant.Client) {
-	log.Printf("[WS] Tab closed! Cleaning up user: %s", client.UserId)
+	logger.Infof("[WS] Tab closed! Cleaning up user: %s", client.UserId)
 
 	// 1. Utilize your existing Client/Publisher/Subscriber cleanup!
 	client.CleanUpClient()
@@ -34,12 +34,12 @@ func (wh *WsHandler) CompleteCleanup(client *participant.Client) {
 }
 
 func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
-	log.Println("[WS] Received websocket upgrade request")
+	logger.Info("[WS] Received websocket upgrade request")
 
 	//HTTP -> WS
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Println("[WS] Error upgrading websocket:", err)
+		logger.Error("[WS] Error upgrading websocket:", err)
 		return
 	}
 
@@ -63,7 +63,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 		client,
 	)
 	if err != nil {
-		log.Println("[WS] Error creating publisher:", err)
+		logger.Error("[WS] Error creating publisher:", err)
 		return
 	}
 	client.Publisher = publisher
@@ -76,7 +76,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 		client,
 	)
 	if err != nil {
-		log.Println("[WS] Error creating subscriber:", err)
+		logger.Error("[WS] Error creating subscriber:", err)
 		return
 	}
 	client.Subscriber = subscriber
@@ -88,7 +88,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 		//We get msgType, msg and the err but we are not handlng the msgType right now hence we put a _ for now
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
-			log.Println("[WS] Error reading websocket message:", err)
+			logger.Error("[WS] Error reading websocket message:", err)
 			break
 		}
 
@@ -97,7 +97,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 
 		err = json.Unmarshal(msg, &base)
 		if err != nil {
-			log.Println("[WS] Error decoding base message:", err)
+			logger.Error("[WS] Error decoding base message:", err)
 			continue
 		}
 
@@ -109,14 +109,14 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 
 			err := json.Unmarshal(msg, &signal)
 			if err != nil {
-				log.Println("[WS] Error decoding offer message:", err)
+				logger.Error("[WS] Error decoding offer message:", err)
 				continue
 			}
 
-			log.Println("[WS] Received 'offer' from client:", client.UserId)
+			logger.Info("[WS] Received 'offer' from client:", client.UserId)
 			answer, err := client.Publisher.HandleOffer(signal)
 			if err != nil {
-				log.Println("[WS] Error handling offer:", err)
+				logger.Error("[WS] Error handling offer:", err)
 				continue
 			}
 
@@ -133,11 +133,11 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 
 			err := json.Unmarshal(msg, &iceMessage)
 			if err != nil {
-				log.Println("[WS] Error decoding ICE candidate message:", err)
+				logger.Error("[WS] Error decoding ICE candidate message:", err)
 				continue
 			}
 
-			log.Println("[WS] Received 'ice-candidate' from client:", client.UserId)
+			logger.Info("[WS] Received 'ice-candidate' from client:", client.UserId)
 			client.Publisher.HandleICECandidate(iceMessage, client)
 
 		case "populate-room":
@@ -148,7 +148,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 			// Decode the ws message
 			err := json.Unmarshal(msg, &createRoomMessage)
 			if err != nil {
-				log.Println("[WS] Error decoding create-room message:", err)
+				logger.Error("[WS] Error decoding create-room message:", err)
 				return
 			}
 
@@ -159,7 +159,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 			// Get the room.
 			room, ok := wh.RoomHandler.GetRoom(createRoomMessage.RoomId)
 			if !ok {
-				log.Println("[WS] Room not found")
+				logger.Info("[WS] Room not found")
 				return
 			}
 
@@ -168,7 +168,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 			room.UserIdToClient[createRoomMessage.UserId] = client
 			room.Mu.Unlock()
 
-			// log.Println("[WS] roomId attached to the client successfully")
+			// logger.Info("[WS] roomId attached to the client successfully")
 
 			wh.RoomHandler.SendRemoteMediaToLocalPeer(client)
 
@@ -176,16 +176,16 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 			// If the frontend explicitly sends a peer-left websocket event,
 			// we can just break the loop as this triggers the defer block at the top,
 			// which automatically does CompleteCleanup.
-			log.Printf("[WS] Client %s explicitly requested to leave", client.UserId)
+			logger.Infof("[WS] Client %s explicitly requested to leave", client.UserId)
 			return
 
 		case "subscriber-answer":
-			log.Printf("[WS] Received 'subscriber-answer' from client: %s", client.UserId)
+			logger.Infof("[WS] Received 'subscriber-answer' from client: %s", client.UserId)
 			answerMsg := &types.SubscriberAnswerMessage{}
 
 			err := json.Unmarshal(msg, answerMsg)
 			if err != nil {
-				log.Println("[WS] Error decoding subscriber-answer message:", err)
+				logger.Error("[WS] Error decoding subscriber-answer message:", err)
 				return
 			}
 
@@ -196,11 +196,11 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 
 			err := json.Unmarshal(msg, &subscriberIceMessage)
 			if err != nil {
-				log.Println("[WS] Error decoding subscriber-ice-candidate message:", err)
+				logger.Error("[WS] Error decoding subscriber-ice-candidate message:", err)
 				return
 			}
 
-			log.Printf("[WS] Received 'subscriber-ice-candidate' from client: %s", client.UserId)
+			logger.Infof("[WS] Received 'subscriber-ice-candidate' from client: %s", client.UserId)
 			client.Subscriber.HandleIce(subscriberIceMessage)
 
 		case "audio-toggle":
@@ -208,7 +208,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 
 			err := json.Unmarshal(msg, &audioToggleMessage)
 			if err != nil {
-				log.Println("[WS] Error decoding audio-toggle message:", err)
+				logger.Error("[WS] Error decoding audio-toggle message:", err)
 				return
 			}
 
@@ -219,19 +219,19 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 
 			err := json.Unmarshal(msg, &videoToggleMessage)
 			if err != nil {
-				log.Println("[WS] Error decoding video-toggle message:", err)
+				logger.Error("[WS] Error decoding video-toggle message:", err)
 				return
 			}
 
 			wh.RoomHandler.HandleToggleVideo(videoToggleMessage.Muted, client)
 
 		default:
-			log.Println("[WS] Unknown message type received:", base.Type)
+			logger.Info("[WS] Unknown message type received:", base.Type)
 		}
 
-		// log.Println("[WS] Finished processing current websocket message")
+		// logger.Info("[WS] Finished processing current websocket message")
 	}
 
-	log.Println("[WS] Read loop ended")
+	logger.Info("[WS] Read loop ended")
 	// wh.SFU.CleanupSFU(client)
 }
