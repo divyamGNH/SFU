@@ -4,7 +4,7 @@ import (
 	"backend/sfu/pool"
 	"backend/types"
 	"fmt"
-	"log"
+	"backend/logger"
 	"sync"
 	"time"
 
@@ -93,16 +93,16 @@ func NewSubscriber(iceServers []webrtc.ICEServer, callbacks SubscriberCallbacks,
 	})
 
 	sub.PC.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
-		log.Println("[Subscriber] Subscriber Connection state is:", state)
+		logger.Info("[Subscriber] Subscriber Connection state is:", state)
 		//implement cleanup and re connection logic here
 	})
 
 	sub.PC.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
-		log.Println("[Subscriber] Subscriber ICE state is:", state)
+		logger.Info("[Subscriber] Subscriber ICE state is:", state)
 	})
 
 	sub.PC.OnNegotiationNeeded(func() {
-		log.Println("NEGOTIATION NEEDED")
+		logger.Info("NEGOTIATION NEEDED")
 		sub.RequestNegotiate()
 	})
 
@@ -137,14 +137,14 @@ func (s *Subscriber) createAndSendOffer() {
 
 	offer, err := subPC.CreateOffer(nil)
 	if err != nil {
-		log.Println("[Subscriber] Error creating offer:", err)
+		logger.Error("[Subscriber] Error creating offer:", err)
 		s.clearNegotiating()
 		s.CleanUpSubscriber()
 		return
 	}
 
 	if err := subPC.SetLocalDescription(offer); err != nil {
-		log.Println("[Subscriber] Error setting local description:", err)
+		logger.Error("[Subscriber] Error setting local description:", err)
 		s.clearNegotiating()
 		s.CleanUpSubscriber()
 		return
@@ -169,7 +169,7 @@ func (s *Subscriber) FlushICECandidateQueue() {
 	if !s.RemoteDescSet {
 		s.Mu.Unlock()
 
-		log.Println("[Subscriber] Remote Description for subscriber not set yet. Cannot flush the ICE Candidate queue for subscriber.")
+		logger.Info("[Subscriber] Remote Description for subscriber not set yet. Cannot flush the ICE Candidate queue for subscriber.")
 		return
 	}
 
@@ -185,14 +185,14 @@ func (s *Subscriber) FlushICECandidateQueue() {
 		//Add the Ice candidate to the queue and wait for the remote description to set.
 		err := s.PC.AddICECandidate(candidate.ICECandidate)
 		if err != nil {
-			log.Println("[HandleICECandidate] Error adding subscriber ICE candidate to the queue:", err)
+			logger.Error("[HandleICECandidate] Error adding subscriber ICE candidate to the queue:", err)
 			continue
 		}
 	}
 }
 
 func (s *Subscriber) HandleAnswer(answer *types.SubscriberAnswerMessage) error {
-	log.Printf("Subscriber answer from %s", s.client.UserId)
+	logger.Infof("Subscriber answer from %s", s.client.UserId)
 	remoteSDP := answer.SDP
 
 	subscriberPc := s.PC
@@ -246,7 +246,7 @@ func (s *Subscriber) HandleIce(iceMessage types.ICECandidateMessage) {
 
 	err := subscriberPc.AddICECandidate(iceCandidate)
 	if err != nil {
-		log.Println("Error adding ice candidate on the subscriber PC : ", err)
+		logger.Error("Error adding ice candidate on the subscriber PC : ", err)
 		return
 	}
 }
@@ -316,7 +316,7 @@ func (s *Subscriber) CleanUpSubscriber() {
 	if s.PC != nil {
 		err := s.PC.Close()
 		if err != nil {
-			log.Println("Error closing Subscriber PC : ", err)
+			logger.Error("Error closing Subscriber PC : ", err)
 		}
 
 		// We are not nulling the PC here is because there can be some other go-routines can be using this PC so just Close it and the garbage collector will clean up the PC once the publisher goes out of scope and all the routines die down.

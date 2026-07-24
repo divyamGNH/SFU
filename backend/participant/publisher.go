@@ -3,7 +3,7 @@ package participant
 import (
 	"backend/types"
 	"fmt"
-	"log"
+	"backend/logger"
 	"sync"
 
 	"github.com/pion/rtcp"
@@ -56,7 +56,7 @@ func NewPublisher(iceServers []webrtc.ICEServer, callbacks PublisherCallbacks, c
 
 	//Set up pc events onTrack, onICECandidates, onConnectionStateChange
 	pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
-		log.Println("[Publisher] Received new media track")
+		logger.Info("[Publisher] Received new media track")
 
 		localTrack, err := webrtc.NewTrackLocalStaticRTP(
 			track.Codec().RTPCodecCapability,
@@ -65,7 +65,7 @@ func NewPublisher(iceServers []webrtc.ICEServer, callbacks PublisherCallbacks, c
 		)
 
 		if err != nil {
-			log.Println("[Publisher] Error creating localTrack:", err)
+			logger.Error("[Publisher] Error creating localTrack:", err)
 			return
 		}
 
@@ -84,12 +84,12 @@ func NewPublisher(iceServers []webrtc.ICEServer, callbacks PublisherCallbacks, c
 	})
 
 	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
-		log.Println("[Publisher] Connection state is:", state)
+		logger.Info("[Publisher] Connection state is:", state)
 		//implement cleanup and re connection logic here
 	})
 
 	pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
-		log.Println("[Publisher] ICE state is:", state)
+		logger.Info("[Publisher] ICE state is:", state)
 	})
 
 	pc.OnICECandidate(func(candidate *webrtc.ICECandidate) {
@@ -119,7 +119,7 @@ func (p *Publisher) FlushICECandidateQueue() {
 
 	if !p.RemoteDescSet {
 		p.Mu.Unlock()
-		log.Println("[Publisher] Remote Description not set yet. Cannot flush the ICE Candidate queue.")
+		logger.Info("[Publisher] Remote Description not set yet. Cannot flush the ICE Candidate queue.")
 		return
 	}
 
@@ -129,16 +129,16 @@ func (p *Publisher) FlushICECandidateQueue() {
 	p.PendingCandidates = nil
 	p.Mu.Unlock()
 
-	log.Printf("[Publisher] Flushing %d pending ICE candidates", len(candidates))
+	logger.Infof("[Publisher] Flushing %d pending ICE candidates", len(candidates))
 
 	for _, candidate := range candidates {
 		//Add the Ice candidate to the queue and wait for the remote description to set.
 		err := p.PC.AddICECandidate(candidate.ICECandidate)
 		if err != nil {
-			log.Println("[HandleICECandidate] Error adding ICE candidate to the queue:", err)
+			logger.Error("[HandleICECandidate] Error adding ICE candidate to the queue:", err)
 			continue
 		}
-		log.Println("[Publisher] Successfully added queued ICE candidate")
+		logger.Info("[Publisher] Successfully added queued ICE candidate")
 	}
 }
 
@@ -149,7 +149,7 @@ func (p *Publisher) HandleOffer(signal types.SignalMessage) (webrtc.SessionDescr
 	//trickle ice is started as soon i set any description local or remote
 	err := pc.SetRemoteDescription(signal.SDP)
 	if err != nil {
-		log.Println("[Publisher] Error setting remote description:", err)
+		logger.Error("[Publisher] Error setting remote description:", err)
 		pc.Close()
 		return webrtc.SessionDescription{}, err
 	}
@@ -164,7 +164,7 @@ func (p *Publisher) HandleOffer(signal types.SignalMessage) (webrtc.SessionDescr
 	//Create answer
 	answer, err := pc.CreateAnswer(nil)
 	if err != nil {
-		log.Println("[Publisher] Error creating answer:", err)
+		logger.Error("[Publisher] Error creating answer:", err)
 		pc.Close()
 		return webrtc.SessionDescription{}, err
 	}
@@ -172,7 +172,7 @@ func (p *Publisher) HandleOffer(signal types.SignalMessage) (webrtc.SessionDescr
 	//Set up local description
 	err = pc.SetLocalDescription(answer)
 	if err != nil {
-		log.Println("[Publisher] Error setting local description:", err)
+		logger.Error("[Publisher] Error setting local description:", err)
 		pc.Close()
 		return webrtc.SessionDescription{}, err
 	}
@@ -183,10 +183,10 @@ func (p *Publisher) HandleOffer(signal types.SignalMessage) (webrtc.SessionDescr
 func (p *Publisher) HandleICECandidate(candidate types.ICECandidateMessage, client *Client) {
 	p.Mu.Lock()
 
-	log.Printf("[Publisher] Received ICE candidate: %+v", candidate.ICECandidate)
+	logger.Infof("[Publisher] Received ICE candidate: %+v", candidate.ICECandidate)
 
 	if !p.RemoteDescSet {
-		log.Println("[Publisher] Remote description not set yet, queuing candidate")
+		logger.Info("[Publisher] Remote description not set yet, queuing candidate")
 		p.PendingCandidates = append(p.PendingCandidates, candidate)
 		p.Mu.Unlock()
 		return
@@ -195,10 +195,10 @@ func (p *Publisher) HandleICECandidate(candidate types.ICECandidateMessage, clie
 
 	err := p.PC.AddICECandidate(candidate.ICECandidate)
 	if err != nil {
-		log.Println("[Publisher] Error adding ICE candidate to the PC:", err)
+		logger.Error("[Publisher] Error adding ICE candidate to the PC:", err)
 		return
 	}
-	log.Println("[Publisher] Successfully added ICE candidate directly")
+	logger.Info("[Publisher] Successfully added ICE candidate directly")
 }
 
 func (p *Publisher) CleanUpPublisher() {
@@ -207,7 +207,7 @@ func (p *Publisher) CleanUpPublisher() {
 	if p.PC != nil {
 		err := p.PC.Close()
 		if err != nil {
-			log.Println("Error closing Publisher PC : ", err)
+			logger.Error("Error closing Publisher PC : ", err)
 		}
 
 		// We are not nulling the PC here is because there can be some other go-routines can be using this PC so just Close it and the garbage collector will clean up the PC once the publisher goes out of scope and all the routines die down.

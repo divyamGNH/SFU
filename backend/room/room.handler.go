@@ -5,7 +5,7 @@ import (
 	"backend/sfu"
 	"backend/types"
 	"encoding/json"
-	"log"
+	"backend/logger"
 	"net/http"
 	"sync"
 
@@ -47,14 +47,14 @@ func (rh *RoomHandler) BroadcastMessage(msg any, client *participant.Client) {
 	// Get other peers from the room
 	otherPeers, ok := rh.GetOtherPeersFromARoom(roomId, userId)
 	if !ok {
-		log.Printf("Error braodcasting socket event roomId : %s and userId : %s", roomId, userId)
+		logger.Errorf("Error braodcasting socket event roomId : %s and userId : %s", roomId, userId)
 		return
 	}
 
 	for _, peer := range otherPeers {
 		ok := peer.SafeSend(msg)
 		if !ok {
-			log.Printf("Error sending the broadcast message to peer : %s from cliendId : %s", peer.UserId, userId)
+			logger.Errorf("Error sending the broadcast message to peer : %s from cliendId : %s", peer.UserId, userId)
 		}
 	}
 }
@@ -66,7 +66,7 @@ func (rh *RoomHandler) WriteJSON(w http.ResponseWriter, message any, statusCode 
 	err := json.NewEncoder(w).Encode(message)
 
 	if err != nil {
-		log.Println("[JoinRoom] Error encoding error response:", err)
+		logger.Error("[JoinRoom] Error encoding error response:", err)
 	}
 }
 
@@ -79,7 +79,7 @@ func (rh *RoomHandler) WriteError(w http.ResponseWriter, message string, statusC
 	})
 
 	if err != nil {
-		log.Println("[JoinRoom] Error encoding error response:", err)
+		logger.Error("[JoinRoom] Error encoding error response:", err)
 	}
 }
 
@@ -109,14 +109,14 @@ func (rh *RoomHandler) GetClientFromUserId(userId string) (*participant.Client, 
 	// Get the roomId for this user
 	roomId, ok := rh.RoomIdForUser(userId)
 	if !ok {
-		log.Println("[ROOM] No room found for this userId")
+		logger.Info("[ROOM] No room found for this userId")
 		return nil, false
 	}
 
 	// Get the room using the roomId
 	room, ok := rh.GetRoom(roomId)
 	if !ok {
-		log.Println("[ROOM] Room does not exist")
+		logger.Info("[ROOM] Room does not exist")
 		return nil, false
 	}
 
@@ -126,7 +126,7 @@ func (rh *RoomHandler) GetClientFromUserId(userId string) (*participant.Client, 
 	room.Mu.RUnlock()
 
 	if !exists {
-		log.Println("[ROOM] Client not found in room")
+		logger.Info("[ROOM] Client not found in room")
 		return nil, false
 	}
 
@@ -135,11 +135,11 @@ func (rh *RoomHandler) GetClientFromUserId(userId string) (*participant.Client, 
 
 func (rh *RoomHandler) GetOtherPeersFromARoom(roomId string, userId string) ([]*participant.Client, bool) {
 	//get the room
-	log.Println("Getting peers from the room")
+	logger.Info("Getting peers from the room")
 	room, ok := rh.GetRoom(roomId)
 
 	if !ok {
-		log.Println("Error while getting other peers from a room")
+		logger.Error("Error while getting other peers from a room")
 		return nil, false
 	}
 
@@ -170,7 +170,7 @@ func (rh *RoomHandler) ViewRoom(w http.ResponseWriter, r *http.Request) {
 
 	room, ok := rh.GetRoom(roomId)
 	if !ok {
-		log.Println("[RoomH] Error while getting other peers from a room")
+		logger.Error("[RoomH] Error while getting other peers from a room")
 		rh.WriteError(w, "Room not found", http.StatusNotFound)
 		return
 	}
@@ -388,7 +388,7 @@ func (r *Room) AddPublishedTracks(track *participant.PublishedTrack, receiver *s
 func (rh *RoomHandler) OnTrackPublished(track *participant.PublishedTrack, client *participant.Client) {
 	room, ok := rh.GetRoom(client.RoomId)
 	if !ok {
-		log.Println("[RoomHandler] Error: Room not found for OnTrack")
+		logger.Error("[RoomHandler] Error: Room not found for OnTrack")
 		return
 	}
 
@@ -493,7 +493,7 @@ func (rh *RoomHandler) SendLocalMediaToRemotePeers(client *participant.Client) {
 					peer.Subscriber.RequestNegotiate()
 				}
 			} else if err != nil {
-				log.Println("[RoomHandler] Error publishing stream:", err)
+				logger.Error("[RoomHandler] Error publishing stream:", err)
 			}
 		}
 	}
@@ -527,7 +527,7 @@ func (rh *RoomHandler) SendRemoteMediaToLocalPeer(client *participant.Client) {
 					client.Subscriber.RequestNegotiate()
 				}
 			} else if err != nil {
-				log.Println("[RoomHandler] Error publishing stream:", err)
+				logger.Error("[RoomHandler] Error publishing stream:", err)
 			}
 		}
 	}
@@ -538,7 +538,7 @@ func (rh *RoomHandler) CleanRoom(roomId string) {
 	//first check if the room has any users left or not
 	room, ok := rh.GetRoom(roomId)
 	if !ok {
-		log.Println("Room with this roomid does not exist")
+		logger.Info("Room with this roomid does not exist")
 		return
 	}
 
@@ -547,7 +547,7 @@ func (rh *RoomHandler) CleanRoom(roomId string) {
 	room.Mu.RUnlock()
 
 	if !isEmpty {
-		log.Println("This room still has clients can not clean it")
+		logger.Info("This room still has clients can not clean it")
 		return
 	}
 
@@ -555,7 +555,7 @@ func (rh *RoomHandler) CleanRoom(roomId string) {
 	delete(rh.RoomIdToRoom, roomId)
 	rh.Mu.Unlock()
 
-	log.Printf("[Room] Room with roomid : %v has been deleted", roomId)
+	logger.Infof("[Room] Room with roomid : %v has been deleted", roomId)
 }
 
 func (rh *RoomHandler) RemoveClient(roomId string, userId string) {

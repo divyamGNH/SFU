@@ -1,7 +1,7 @@
 package participant
 
 import (
-	"log"
+	"backend/logger"
 	"sync"
 
 	"github.com/gorilla/websocket"
@@ -28,7 +28,7 @@ type Client struct {
 
 // This clean up only happens when the client leaves not on reconnections as this destroys the PC and connections everything client had with the server.
 func (c *Client) CleanUpClient() {
-	log.Printf("CleanUp for client itself with userId : %v has been triggered", c.UserId)
+	logger.Infof("CleanUp for client itself with userId : %v has been triggered", c.UserId)
 	c.Mu.Lock()
 	if c.ClientClosed {
 		c.Mu.Unlock()
@@ -54,7 +54,7 @@ func (c *Client) CleanUpClient() {
 	if c.Conn != nil {
 		err := c.Conn.Close()
 		if err != nil {
-			log.Printf("Error closing the client connection for client with userId: %v with roomId: %v", c.UserId, c.RoomId)
+			logger.Errorf("Error closing the client connection for client with userId: %v with roomId: %v", c.UserId, c.RoomId)
 		}
 		c.Conn = nil
 	}
@@ -75,7 +75,7 @@ func (c *Client) WritePump() {
 	for msg := range c.Send {
 		err := c.Conn.WriteJSON(msg)
 		if err != nil {
-			log.Println("[WritePump] Error in emitting the event: ", err)
+			logger.Error("[WritePump] Error in emitting the event: ", err)
 			return
 		}
 	}
@@ -100,7 +100,7 @@ func (c *Client) SafeSend(msg any) bool {
 		return true
 
 	default:
-		log.Printf("[Client %s] send channel full", c.UserId)
+		logger.Infof("[Client %s] send channel full", c.UserId)
 		//TODO : prod approach is to simple close the client and disconnect it as it simply can not keep up.
 		return false
 	}

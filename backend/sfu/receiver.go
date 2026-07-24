@@ -1,7 +1,7 @@
 package sfu
 
 import (
-	"log"
+	"backend/logger"
 
 	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v3"
@@ -45,14 +45,14 @@ func (r *Receiver) start() {
 				// Read the packets from the remote track.
 				packet, _, err := r.trackRemote.ReadRTP()
 				if err != nil {
-					log.Println("[SFU/Receiver] Error reading RTP packet:", err)
+					logger.Error("[SFU/Receiver] Error reading RTP packet:", err)
 					return
 				}
 
 				// Write these packets to the localTrack.
 				err = r.localTrack.WriteRTP(packet)
 				if err != nil {
-					log.Println("[SFU/Receiver] Error forwarding RTP packet:", err)
+					logger.Error("[SFU/Receiver] Error forwarding RTP packet:", err)
 					return
 				}
 			}
@@ -70,10 +70,10 @@ func (r *Receiver) SendPLI() {
 		},
 	})
 	if err != nil {
-		log.Println("[SFU/Receiver] Error sending PLI upstream:", err)
+		logger.Error("[SFU/Receiver] Error sending PLI upstream:", err)
 		return
 	}
-	log.Println("[SFU/Receiver] Successfully sent PLI upstream")
+	logger.Info("[SFU/Receiver] Successfully sent PLI upstream")
 }
 
 // Closing the done channel.

@@ -1,7 +1,7 @@
 package main
 
 import (
-	"log"
+	"backend/logger"
 	"net/http"
 
 	"backend/room"
@@ -59,7 +59,18 @@ func setupRoutes(
 }
 
 func main() {
-	log.Println("Main server has started")
+	// Initialize custom logger
+	logger.InitLogger(logger.Config{
+		GlobalLevel: logger.INFO,
+		PackageFilters: map[string]logger.LogLevel{
+			"sfu": logger.DEBUG, // example: set sfu to debug
+		},
+		FileFilters: map[string]logger.LogLevel{
+			// "websocket.handler.go": logger.WARN,
+		},
+	})
+
+	logger.Info("Main server has started")
 
 	roomHandler := room.NewRoomHandler()
 
@@ -76,6 +87,6 @@ func main() {
 	// Start the server.
 	err := http.ListenAndServe(":8080", handler)
 	if err != nil {
-		log.Fatal("Could not start the HTTP server")
+		logger.Fatal("Could not start the HTTP server")
 	}
 }
