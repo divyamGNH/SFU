@@ -1,9 +1,10 @@
 package websocket
 
 import (
-	"backend/models"
+	"backend/config"
+	"backend/participant"
 	"backend/room"
-	"backend/sfu"
+	"backend/types"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -18,8 +19,18 @@ var upgrader = websocket.Upgrader{
 }
 
 type WsHandler struct {
-	SFU         *sfu.SFU
 	RoomHandler *room.RoomHandler
+}
+
+func (wh *WsHandler) CompleteCleanup(client *participant.Client) {
+	log.Printf("[WS] Tab closed! Cleaning up user: %s", client.UserId)
+
+	// 1. Utilize your existing Client/Publisher/Subscriber cleanup!
+	client.CleanUpClient()
+	// 2. Utilize our new helper to remove them from the room
+	if client.RoomId != "" && client.UserId != "" {
+		wh.RoomHandler.RemoveClient(client.RoomId, client.UserId)
+	}
 }
 
 func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
@@ -32,27 +43,48 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Println("[WS] Websocket connected successfully")
-
-	client := &models.Client{
+	client := &participant.Client{
 		Conn:           conn,
 		MidToPublisher: make(map[string]string),
-		// VideoSlots:     make([]*models.MediaSlot, 0, 256),
-		// AudioSlots:     make([]*models.MediaSlot, 0, 256),
-		AudioBool: false,
-		VideoBool: false,
-		Send:      make(chan any, 256),
+		AudioBool:      false,
+		VideoBool:      false,
+		Send:           make(chan any, 256),
 	}
-	// log.Println("[WS] Client created succesfully")
+
+	defer wh.CompleteCleanup(client)
+
+	iceServers := config.FetchICEServers()
+	// Initialize Publisher (and pass the RoomHandler's callback)
+	publisher, err := participant.NewPublisher(
+		iceServers,
+		participant.PublisherCallbacks{
+			OnTrackPublished: wh.RoomHandler.OnTrackPublished,
+		},
+		client,
+	)
+	if err != nil {
+		log.Println("[WS] Error creating publisher:", err)
+		return
+	}
+	client.Publisher = publisher
+	// Initialize Subscriber
+	subscriber, err := participant.NewSubscriber(
+		iceServers,
+		participant.SubscriberCallbacks{
+			OnNegotiationCompleted: wh.RoomHandler.OnNegotiationCompleted,
+		},
+		client,
+	)
+	if err != nil {
+		log.Println("[WS] Error creating subscriber:", err)
+		return
+	}
+	client.Subscriber = subscriber
 
 	go client.WritePump()
-	// log.Println("[HandleOffer] WritePump started")
 
 	//The backend must listen for the WS events continously so we run a infinite for loop.
 	for {
-
-		// log.Println("[WS] Waiting for websocket message")
-
 		//We get msgType, msg and the err but we are not handlng the msgType right now hence we put a _ for now
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
@@ -60,12 +92,8 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
-		// log.Println("[WS] Raw message received:", string(msg))
-
 		//decode to a base type to understand what kind of msg it is.
-		var base models.BaseMessage
-
-		// log.Println("[WS] Decoding base message")
+		var base types.BaseMessage
 
 		err = json.Unmarshal(msg, &base)
 		if err != nil {
@@ -73,13 +101,11 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// log.Println("[WS] Message type:", base.Type)
-
 		switch base.Type {
 
 		case "offer":
 			//handle offer event
-			var signal models.SignalMessage
+			var signal types.SignalMessage
 
 			err := json.Unmarshal(msg, &signal)
 			if err != nil {
@@ -87,13 +113,23 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
-			wh.SFU.HandleOffer(signal, conn, client)
+			log.Println("[WS] Received 'offer' from client:", client.UserId)
+			answer, err := client.Publisher.HandleOffer(signal)
+			if err != nil {
+				log.Println("[WS] Error handling offer:", err)
+				continue
+			}
 
-			// log.Println("[WS] Finished SFU.HandleOffer")
+			// Send the answer.
+			answerMsg := types.SignalMessage{
+				Type: "answer",
+				SDP:  answer,
+			}
+			client.SafeSend(answerMsg)
 
 		case "ice-candidate":
 			//Handle ice candidate event
-			var iceMessage models.ICECandidateMessage
+			var iceMessage types.ICECandidateMessage
 
 			err := json.Unmarshal(msg, &iceMessage)
 			if err != nil {
@@ -101,12 +137,13 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
-			wh.SFU.HandleICECandidate(iceMessage, client)
+			log.Println("[WS] Received 'ice-candidate' from client:", client.UserId)
+			client.Publisher.HandleICECandidate(iceMessage, client)
 
 		case "populate-room":
 			// User creates or joins the room he/she is eventually entering the room so only one event to just add the roomId to the client struct
 
-			var createRoomMessage models.PopulateRoomMessage
+			var createRoomMessage types.PopulateRoomMessage
 
 			// Decode the ws message
 			err := json.Unmarshal(msg, &createRoomMessage)
@@ -133,23 +170,18 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 
 			// log.Println("[WS] roomId attached to the client successfully")
 
+			wh.RoomHandler.SendRemoteMediaToLocalPeer(client)
+
 		case "peer-left":
-			leaveRoomMessage := &models.LeaveRoomSuccessMessage{}
-
-			// Decode the ws message
-			err := json.Unmarshal(msg, leaveRoomMessage)
-			if err != nil {
-				log.Println("[WS] Error decoding join-room message:", err)
-				return
-			}
-
-			wh.SFU.CleanUpSFU(client)
-			//TODO : Handle cleanup here.
-			// wh.RoomHandler.LeaveRoom()
+			// If the frontend explicitly sends a peer-left websocket event,
+			// we can just break the loop as this triggers the defer block at the top,
+			// which automatically does CompleteCleanup.
+			log.Printf("[WS] Client %s explicitly requested to leave", client.UserId)
+			return
 
 		case "subscriber-answer":
-			log.Printf("Received subscriber answer")
-			answerMsg := &models.SubscriberAnswerMessage{}
+			log.Printf("[WS] Received 'subscriber-answer' from client: %s", client.UserId)
+			answerMsg := &types.SubscriberAnswerMessage{}
 
 			err := json.Unmarshal(msg, answerMsg)
 			if err != nil {
@@ -157,10 +189,10 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			wh.SFU.HandleSubscriberAnswer(answerMsg, client)
+			client.Subscriber.HandleAnswer(answerMsg)
 
 		case "subscriber-ice-candidate":
-			var subscriberIceMessage models.ICECandidateMessage
+			var subscriberIceMessage types.ICECandidateMessage
 
 			err := json.Unmarshal(msg, &subscriberIceMessage)
 			if err != nil {
@@ -168,10 +200,11 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			wh.SFU.HandleSubscriberIce(subscriberIceMessage, client)
+			log.Printf("[WS] Received 'subscriber-ice-candidate' from client: %s", client.UserId)
+			client.Subscriber.HandleIce(subscriberIceMessage)
 
 		case "audio-toggle":
-			var audioToggleMessage models.AudioToggleMessage
+			var audioToggleMessage types.AudioToggleMessage
 
 			err := json.Unmarshal(msg, &audioToggleMessage)
 			if err != nil {
@@ -179,10 +212,10 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			wh.SFU.HandleToggleAudio(audioToggleMessage.Muted, client)
+			wh.RoomHandler.HandleToggleAudio(audioToggleMessage.Muted, client)
 
 		case "video-toggle":
-			var videoToggleMessage models.VideoToggleMessage
+			var videoToggleMessage types.VideoToggleMessage
 
 			err := json.Unmarshal(msg, &videoToggleMessage)
 			if err != nil {
@@ -190,7 +223,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			wh.SFU.HandleToggleVideo(videoToggleMessage.Muted, client)
+			wh.RoomHandler.HandleToggleVideo(videoToggleMessage.Muted, client)
 
 		default:
 			log.Println("[WS] Unknown message type received:", base.Type)

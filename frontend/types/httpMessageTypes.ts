@@ -8,8 +8,14 @@ export type JoinRoomResponse = {
     userId : string,
 }
 
+export type PeerState = {
+    userId: string,
+    audioBool: boolean,
+    videoBool: boolean,
+}
+
 export type ViewRoomResponse = {
-    otherPeers : string[],
+    otherPeers: PeerState[],
 }
 
 export type LeaveRoomResponse = {

@@ -1,11 +1,10 @@
-package models
+package participant
 
 import (
 	"log"
 	"sync"
 
 	"github.com/gorilla/websocket"
-	"github.com/pion/webrtc/v3"
 )
 
 // Use this client struct as later on we dont just need pc we would need userId, roomId etc a lot of things that is why use this struct.
@@ -25,77 +24,6 @@ type Client struct {
 
 	Mu   sync.RWMutex
 	Send chan any
-}
-
-type Publisher struct {
-	PC                *webrtc.PeerConnection
-	RemoteDescSet     bool
-	PendingCandidates []ICECandidateMessage
-	Mu                sync.RWMutex
-}
-
-type Subscriber struct {
-	PC                 *webrtc.PeerConnection
-	RemoteDescSet      bool
-	PendingCandidates  []ICECandidateMessage
-	PendingTransceiver []*webrtc.RTPTransceiver
-	VideoSlots         []*MediaSlot
-	AudioSlots         []*MediaSlot
-	Mu                 sync.RWMutex
-}
-
-type MediaSlot struct {
-	Transceiver      *webrtc.RTPTransceiver
-	Occupied         bool
-	PublisherId      string
-	Kind             webrtc.RTPCodecType
-	DrainRTCPStarted bool
-	TrackID          string
-
-	Mu sync.RWMutex
-}
-
-type PublishedTrack struct {
-	PublisherID string
-	TrackID     string
-	StreamID    string
-	SSRC        webrtc.SSRC
-	Kind        webrtc.RTPCodecType
-	LocalTrack  *webrtc.TrackLocalStaticRTP
-
-	Mu sync.RWMutex
-}
-
-func (s *Subscriber) CleanUpSubscriber() {
-
-	// Important to clean up external resources.
-	if s.PC != nil {
-		err := s.PC.Close()
-		if err != nil {
-			log.Println("Error closing Subscriber PC : ", err)
-		}
-		s.PC = nil
-	}
-
-	// Optional to clean up internal resources but better practice and more safe to clean them.
-	s.VideoSlots = nil
-	s.AudioSlots = nil
-	s.PendingCandidates = nil
-}
-
-func (p *Publisher) CleanUpPublisher() {
-
-	// Important to clean up external resources.
-	if p.PC != nil {
-		err := p.PC.Close()
-		if err != nil {
-			log.Println("Error closing Publisher PC : ", err)
-		}
-		p.PC = nil
-	}
-
-	// Optional to clean up internal resources but better practice and more safe to clean them.
-	p.PendingCandidates = nil
 }
 
 // This clean up only happens when the client leaves not on reconnections as this destroys the PC and connections everything client had with the server.
@@ -153,8 +81,7 @@ func (c *Client) WritePump() {
 	}
 }
 
-//TODO : Implement PING/PONG Hearbeat solution for zombie clients.
-
+// TODO : Implement PING/PONG Hearbeat solution for zombie clients.
 func (c *Client) SafeSend(msg any) bool {
 
 	c.Mu.RLock()

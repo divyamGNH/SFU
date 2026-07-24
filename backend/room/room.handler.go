@@ -1,7 +1,9 @@
 package room
 
 import (
-	"backend/models"
+	"backend/participant"
+	"backend/sfu"
+	"backend/types"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -18,9 +20,12 @@ type RoomHandler struct {
 }
 
 type Room struct {
-	RoomId         string
-	UserIdToClient map[string]*models.Client
-	UserIds        []string
+	RoomId                   string
+	UserIdToClient           map[string]*participant.Client
+	UserIds                  []string
+	UserIdToPublishedTracks  map[string][]*participant.PublishedTrack
+	TrackIdToPublishedTracks map[string]*participant.PublishedTrack
+	TrackIdToReceiver        map[string]*sfu.Receiver
 
 	Mu sync.RWMutex
 }
@@ -34,6 +39,25 @@ func NewRoomHandler() *RoomHandler {
 }
 
 //Helper functions.
+
+func (rh *RoomHandler) BroadcastMessage(msg any, client *participant.Client) {
+	roomId := client.RoomId
+	userId := client.UserId
+
+	// Get other peers from the room
+	otherPeers, ok := rh.GetOtherPeersFromARoom(roomId, userId)
+	if !ok {
+		log.Printf("Error braodcasting socket event roomId : %s and userId : %s", roomId, userId)
+		return
+	}
+
+	for _, peer := range otherPeers {
+		ok := peer.SafeSend(msg)
+		if !ok {
+			log.Printf("Error sending the broadcast message to peer : %s from cliendId : %s", peer.UserId, userId)
+		}
+	}
+}
 
 func (rh *RoomHandler) WriteJSON(w http.ResponseWriter, message any, statusCode int) {
 	w.Header().Set("Content-Type", "application/json")
@@ -50,7 +74,7 @@ func (rh *RoomHandler) WriteError(w http.ResponseWriter, message string, statusC
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 
-	err := json.NewEncoder(w).Encode(models.ErrorResponse{
+	err := json.NewEncoder(w).Encode(types.ErrorResponse{
 		Message: message,
 	})
 
@@ -81,7 +105,7 @@ func (rh *RoomHandler) RoomIdForUser(userId string) (string, bool) {
 	return roomId, ok
 }
 
-func (rh *RoomHandler) GetClientFromUserId(userId string) (*models.Client, bool) {
+func (rh *RoomHandler) GetClientFromUserId(userId string) (*participant.Client, bool) {
 	// Get the roomId for this user
 	roomId, ok := rh.RoomIdForUser(userId)
 	if !ok {
@@ -109,7 +133,7 @@ func (rh *RoomHandler) GetClientFromUserId(userId string) (*models.Client, bool)
 	return client, true
 }
 
-func (rh *RoomHandler) GetOtherPeersFromARoom(roomId string, userId string) ([]*models.Client, bool) {
+func (rh *RoomHandler) GetOtherPeersFromARoom(roomId string, userId string) ([]*participant.Client, bool) {
 	//get the room
 	log.Println("Getting peers from the room")
 	room, ok := rh.GetRoom(roomId)
@@ -121,13 +145,16 @@ func (rh *RoomHandler) GetOtherPeersFromARoom(roomId string, userId string) ([]*
 
 	//read the clients map from the room.UserIdToRoomId and return all the users except the userId from the parameters
 
-	var otherUsers []*models.Client
+	var otherUsers []*participant.Client
+
+	room.Mu.Lock()
 	for id, client := range room.UserIdToClient {
 		if id == userId {
 			continue
 		}
 		otherUsers = append(otherUsers, client)
 	}
+	room.Mu.Unlock()
 
 	return otherUsers, true
 }
@@ -148,22 +175,26 @@ func (rh *RoomHandler) ViewRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// log.Println(clientId)
-	var otherPeers []string
+	var otherPeers []types.PeerState
 	room.Mu.RLock()
-	for userId := range room.UserIdToClient {
-		// if userId == clientId {
+	for _, client := range room.UserIdToClient {
+		// if client.UserId == clientId {
 		// 	continue
 		// }
-		otherPeers = append(otherPeers, userId)
+
+		client.Mu.RLock()
+		state := types.PeerState{
+			UserId:    client.UserId,
+			AudioBool: client.AudioBool,
+			VideoBool: client.VideoBool,
+		}
+		client.Mu.RUnlock()
+
+		otherPeers = append(otherPeers, state)
 	}
 	room.Mu.RUnlock()
 
-	for userId := range otherPeers {
-		log.Println(userId)
-	}
-
-	response := models.ViewRoomResponse{
+	response := types.ViewRoomResponse{
 		OtherPeers: otherPeers,
 	}
 
@@ -181,9 +212,12 @@ func (rh *RoomHandler) CreateRoom(w http.ResponseWriter, r *http.Request) {
 	roomId := rh.RoomIdGenerator()
 
 	room := &Room{
-		RoomId:         roomId,
-		UserIdToClient: make(map[string]*models.Client),
-		UserIds:        []string{},
+		RoomId:                   roomId,
+		UserIdToClient:           make(map[string]*participant.Client),
+		UserIds:                  []string{},
+		UserIdToPublishedTracks:  make(map[string][]*participant.PublishedTrack),
+		TrackIdToPublishedTracks: make(map[string]*participant.PublishedTrack),
+		TrackIdToReceiver:        make(map[string]*sfu.Receiver),
 	}
 
 	// Add roomId -> room
@@ -199,7 +233,7 @@ func (rh *RoomHandler) CreateRoom(w http.ResponseWriter, r *http.Request) {
 	room.UserIds = append(room.UserIds, clientId)
 	room.Mu.Unlock()
 
-	response := models.CreateRoomResponse{
+	response := types.CreateRoomResponse{
 		RoomId: roomId,
 		UserId: clientId,
 	}
@@ -261,7 +295,7 @@ func (rh *RoomHandler) JoinRoom(w http.ResponseWriter, r *http.Request) {
 	rh.Mu.Unlock()
 
 	// emit the peer-joined event to all the other connected peers in the room.
-	peerJoinedMsg := models.JoinRoomSuccessMessage{
+	peerJoinedMsg := types.JoinRoomSuccessMessage{
 		Type:   "peer-joined",
 		RoomId: roomId,
 		UserId: clientId,
@@ -281,7 +315,7 @@ func (rh *RoomHandler) JoinRoom(w http.ResponseWriter, r *http.Request) {
 
 	room.Mu.RUnlock()
 
-	successMsg := models.JoinRoomResponse{
+	successMsg := types.JoinRoomResponse{
 		RoomId: roomId,
 		UserId: clientId,
 	}
@@ -303,51 +337,17 @@ func (rh *RoomHandler) LeaveRoom(w http.ResponseWriter, r *http.Request) {
 	roomId := vars["roomId"]
 	userId := vars["clientId"]
 
-	//Check if the room even exists or not
+	// Check if the room even exists or not
 	room, ok := rh.GetRoom(roomId)
 	if !ok {
 		rh.WriteError(w, "No such room with this roomId exists", http.StatusNotFound)
 		return
 	}
 
-	//delete the client from the room
-	room.Mu.Lock()
+	rh.RemoveClient(roomId, userId)
 
-	// Check if the userId sent by the frontend actually exists before cleaning this up.
-	found := false
-	for _, id := range room.UserIds {
-		if id == userId {
-			found = true
-			break
-		}
-	}
-
-	if !found {
-		room.Mu.Unlock()
-
-		rh.WriteError(w, "User is not a member of this room", http.StatusNotFound)
-		return
-	}
-
-	delete(room.UserIdToClient, userId)
-
-	for i, id := range room.UserIds {
-		if id == userId {
-			room.UserIds = append(room.UserIds[:i], room.UserIds[i+1:]...)
-			break
-		}
-	}
-
-	room.Mu.Unlock()
-
-	rh.Mu.Lock()
-	delete(rh.UserIdToRoomId, userId)
-	rh.Mu.Unlock()
-
-	rh.CleanRoom(roomId)
-
-	// emit the peer-left event to all the remaining connected peers in the room.
-	peerLeftMsg := models.LeaveRoomSuccessMessage{
+	// Emit the peer-left event to all the remaining connected peers in the room.
+	peerLeftMsg := types.LeaveRoomSuccessMessage{
 		Type:   "peer-left",
 		RoomId: roomId,
 		UserId: userId,
@@ -357,7 +357,7 @@ func (rh *RoomHandler) LeaveRoom(w http.ResponseWriter, r *http.Request) {
 
 	for id, client := range room.UserIdToClient {
 
-		// do not emit the event to the leaving user itself
+		// Do not emit the event to the leaving user itself
 		if id == userId {
 			continue
 		}
@@ -367,12 +367,170 @@ func (rh *RoomHandler) LeaveRoom(w http.ResponseWriter, r *http.Request) {
 
 	room.Mu.RUnlock()
 
-	//emit the leave-room-success response
-	successMsg := models.LeaveRoomResponse{
+	// Emit the leave-room-success response
+	successMsg := types.LeaveRoomResponse{
 		Message: "Left room successfully",
 	}
 
 	rh.WriteJSON(w, successMsg, http.StatusOK)
+}
+
+func (r *Room) AddPublishedTracks(track *participant.PublishedTrack, receiver *sfu.Receiver) {
+	r.Mu.Lock()
+
+	r.UserIdToPublishedTracks[track.PublisherID] = append(r.UserIdToPublishedTracks[track.PublisherID], track)
+	r.TrackIdToPublishedTracks[track.TrackID] = track
+	r.TrackIdToReceiver[track.TrackID] = receiver
+
+	r.Mu.Unlock()
+}
+
+func (rh *RoomHandler) OnTrackPublished(track *participant.PublishedTrack, client *participant.Client) {
+	room, ok := rh.GetRoom(client.RoomId)
+	if !ok {
+		log.Println("[RoomHandler] Error: Room not found for OnTrack")
+		return
+	}
+
+	receiver := sfu.NewReceiver(track.RemoteTrack, track.LocalTrack, client.Publisher)
+
+	room.AddPublishedTracks(track, receiver)
+
+	// Broadcast the newly published track to all other peers in the room
+	rh.SendLocalMediaToRemotePeers(client)
+}
+
+func (rh *RoomHandler) HandleToggleAudio(muted bool, client *participant.Client) {
+	client.Mu.Lock()
+	client.AudioBool = muted
+	client.Mu.Unlock()
+
+	msg := &types.AudioToggleMessageRes{
+		Type:   "audio-toggle",
+		UserId: client.UserId,
+		Muted:  client.AudioBool,
+	}
+
+	// Send a event to the other peers in the room so that they can update their UI.
+	rh.BroadcastMessage(msg, client)
+}
+
+func (rh *RoomHandler) HandleToggleVideo(muted bool, client *participant.Client) {
+	client.Mu.Lock()
+	client.VideoBool = muted
+	client.Mu.Unlock()
+
+	msg := &types.VideoToggleMessageRes{
+		Type:   "video-toggle",
+		UserId: client.UserId,
+		Muted:  client.VideoBool,
+	}
+
+	// Send a event to the other peers in the room so that they can update their UI.
+	rh.BroadcastMessage(msg, client)
+}
+
+func (rh *RoomHandler) publishTrackToSubscriber(subscriber *participant.Client, track *participant.PublishedTrack) (bool, bool, error) {
+	needsNegotiation, alreadyPublished, slot, err := subscriber.Subscriber.SubscribeToTrack(track)
+
+	if needsNegotiation || alreadyPublished || err != nil {
+		return needsNegotiation, alreadyPublished, err
+	}
+
+	// Get the room.
+	room, _ := rh.GetRoom(subscriber.RoomId)
+
+	// Look up the receiver from the room state
+	room.Mu.RLock()
+	rx := room.TrackIdToReceiver[track.TrackID]
+	room.Mu.RUnlock()
+
+	// Start the RTCPDrain if not started already.
+	if rx != nil && slot.TryStartDrainRTCP() {
+		fwd := sfu.NewForwarder(rx, slot.Transceiver.Sender())
+		// Start a new go-routine for draining the RTCP.
+		go fwd.DrainRTCP()
+	}
+
+	// Send the MID mapping to the frontend.
+	msg := types.PublishMediaMessage{
+		Type:      "media-published",
+		Mid:       slot.Transceiver.Mid(),
+		Publisher: track.PublisherID,
+	}
+	subscriber.SafeSend(msg)
+
+	return false, false, nil
+}
+
+func (rh *RoomHandler) SendLocalMediaToRemotePeers(client *participant.Client) {
+	// Get the other peers.
+	otherPeers, ok := rh.GetOtherPeersFromARoom(client.RoomId, client.UserId)
+	if !ok {
+		return
+	}
+
+	// Get the room.
+	room, ok := rh.GetRoom(client.RoomId)
+	if !ok {
+		return
+	}
+
+	// Get the localTracks.
+	room.Mu.RLock()
+	localTracks := append([]*participant.PublishedTrack(nil), room.UserIdToPublishedTracks[client.UserId]...)
+	room.Mu.RUnlock()
+
+	// Send each localTrack to each remotePeer in the room.
+	for _, peer := range otherPeers {
+		for _, localTrack := range localTracks {
+			needNegotiation, _, err := rh.publishTrackToSubscriber(peer, localTrack)
+			if needNegotiation {
+				// Trigger Subscriber grow
+				kind := localTrack.Kind
+				err := peer.Subscriber.GrowPool(kind)
+				if err == nil {
+					peer.Subscriber.RequestNegotiate()
+				}
+			} else if err != nil {
+				log.Println("[RoomHandler] Error publishing stream:", err)
+			}
+		}
+	}
+}
+
+func (rh *RoomHandler) SendRemoteMediaToLocalPeer(client *participant.Client) {
+	// Get the other peers in the room.
+	otherPeers, ok := rh.GetOtherPeersFromARoom(client.RoomId, client.UserId)
+	if !ok {
+		return
+	}
+
+	// Get the room.
+	room, ok := rh.GetRoom(client.RoomId)
+	if !ok {
+		return
+	}
+
+	// Send each remote peers each track to the local peer.
+	for _, peer := range otherPeers {
+		room.Mu.RLock()
+		tracks := room.UserIdToPublishedTracks[peer.UserId]
+		room.Mu.RUnlock()
+
+		for _, publishedTrack := range tracks {
+			needNegotiation, _, err := rh.publishTrackToSubscriber(client, publishedTrack)
+			if needNegotiation {
+				kind := publishedTrack.Kind
+				err := client.Subscriber.GrowPool(kind)
+				if err == nil {
+					client.Subscriber.RequestNegotiate()
+				}
+			} else if err != nil {
+				log.Println("[RoomHandler] Error publishing stream:", err)
+			}
+		}
+	}
 }
 
 // Handle all the cleanup
@@ -398,4 +556,58 @@ func (rh *RoomHandler) CleanRoom(roomId string) {
 	rh.Mu.Unlock()
 
 	log.Printf("[Room] Room with roomid : %v has been deleted", roomId)
+}
+
+func (rh *RoomHandler) RemoveClient(roomId string, userId string) {
+	// Get the room
+	room, ok := rh.GetRoom(roomId)
+	if !ok {
+		return
+	}
+
+	room.Mu.Lock()
+
+	client, clientExists := room.UserIdToClient[userId]
+
+	for i, id := range room.UserIds {
+		if id == userId {
+			room.UserIds = append(room.UserIds[:i], room.UserIds[i+1:]...)
+			break
+		}
+	}
+
+	delete(room.UserIdToClient, userId)
+
+	if tracks, exists := room.UserIdToPublishedTracks[userId]; exists {
+		for _, track := range tracks {
+			delete(room.TrackIdToPublishedTracks, track.TrackID)
+			delete(room.TrackIdToReceiver, track.TrackID)
+		}
+		delete(room.UserIdToPublishedTracks, userId)
+	}
+
+	room.Mu.Unlock()
+
+	// Send a peer-left ws message.
+	peerLeftMsg := types.LeaveRoomSuccessMessage{
+		Type:   "peer-left",
+		RoomId: roomId,
+		UserId: userId,
+	}
+
+	if clientExists {
+		rh.BroadcastMessage(peerLeftMsg, client)
+	}
+
+	rh.Mu.Lock()
+	delete(rh.UserIdToRoomId, userId)
+	rh.Mu.Unlock()
+
+	rh.CleanRoom(roomId)
+}
+
+// OnNegotiationCompleted is called when a subscriber finishes its WebRTC offer/answer negotiation.
+// We trigger SendRemoteMediaToLocalPeer to retry publishing any tracks that were blocked waiting for a transceiver.
+func (rh *RoomHandler) OnNegotiationCompleted(client *participant.Client) {
+	rh.SendRemoteMediaToLocalPeer(client)
 }

@@ -5,16 +5,26 @@ import (
 	"net/http"
 
 	"backend/room"
-	"backend/sfu"
 	"backend/websocket"
 
 	"github.com/gorilla/mux"
 )
 
 func enableCORS(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	allowedOrigins := map[string]bool{
+		"http://localhost:3000": true,
+		"http://127.0.0.1:3000": true,
+	}
 
-		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:3000")
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if allowedOrigins[origin] {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		} else {
+			// Fallback if no origin is provided or matched
+			w.Header().Set("Access-Control-Allow-Origin", "http://127.0.0.1:3000")
+		}
+
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
@@ -53,21 +63,18 @@ func main() {
 
 	roomHandler := room.NewRoomHandler()
 
-	sfuInstance := sfu.NewSFU(roomHandler)
-
 	wsHandler := &websocket.WsHandler{
-		SFU:         sfuInstance,
 		RoomHandler: roomHandler,
 	}
 
 	router := mux.NewRouter()
-
 	setupRoutes(router, wsHandler, roomHandler)
 
+	// Enable CORS.
 	handler := enableCORS(router)
 
+	// Start the server.
 	err := http.ListenAndServe(":8080", handler)
-
 	if err != nil {
 		log.Fatal("Could not start the HTTP server")
 	}
