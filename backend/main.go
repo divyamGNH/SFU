@@ -1,6 +1,7 @@
 package main
 
 import (
+	"backend/api"
 	"backend/logger"
 	"net/http"
 
@@ -43,6 +44,7 @@ func setupRoutes(
 	router *mux.Router,
 	wsHandler *websocket.WsHandler,
 	roomHandler *room.RoomHandler,
+	apiHandler *api.ApiHandler,
 ) {
 
 	// websocket route
@@ -51,9 +53,15 @@ func setupRoutes(
 	// room routes
 	router.HandleFunc("/createroom", roomHandler.CreateRoom).Methods("POST")
 
-	router.HandleFunc("/joinroom/{roomId}", roomHandler.JoinRoom).Methods("POST")
+	router.HandleFunc("/room/{roomId}/{clientId}/sfu/join", apiHandler.JoinRoom).Methods("POST")
 
-	router.HandleFunc("/leaveroom/{roomId}/{clientId}", roomHandler.LeaveRoom).Methods("POST")
+	router.HandleFunc("/room/{roomId}/{clientId}/sfu/leave", apiHandler.LeaveRoom).Methods("POST")
+
+	router.HandleFunc("/room/{roomId}/{clientId}/sfu/offer", apiHandler.Offer).Methods("POST")
+
+	router.HandleFunc("/room/{roomId}/{clientId}/sfu/answer", apiHandler.Answer).Methods("POST")
+
+	router.HandleFunc("/room/{roomId}/{clientId}/sfu/ice", apiHandler.Ice).Methods("POST")
 
 	router.HandleFunc("/viewroom/{roomId}", roomHandler.ViewRoom).Methods("GET")
 }
@@ -69,17 +77,19 @@ func main() {
 			// "websocket.handler.go": logger.WARN,
 		},
 	})
-
 	logger.Info("Main server has started")
 
+	// Create handlers.
 	roomHandler := room.NewRoomHandler()
-
 	wsHandler := &websocket.WsHandler{
 		RoomHandler: roomHandler,
 	}
+	apiHandler := &api.ApiHandler{
+		RoomManager: roomHandler,
+	}
 
 	router := mux.NewRouter()
-	setupRoutes(router, wsHandler, roomHandler)
+	setupRoutes(router, wsHandler, roomHandler, apiHandler)
 
 	// Enable CORS.
 	handler := enableCORS(router)

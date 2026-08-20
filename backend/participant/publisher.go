@@ -1,9 +1,9 @@
 package participant
 
 import (
+	"backend/logger"
 	"backend/types"
 	"fmt"
-	"backend/logger"
 	"sync"
 
 	"github.com/pion/rtcp"
@@ -142,12 +142,17 @@ func (p *Publisher) FlushICECandidateQueue() {
 	}
 }
 
-func (p *Publisher) HandleOffer(signal types.SignalMessage) (webrtc.SessionDescription, error) {
+func (p *Publisher) HandleOffer(sdpString string) (webrtc.SessionDescription, error) {
 	pc := p.PC
+
+	offer := webrtc.SessionDescription{
+		Type: webrtc.SDPTypeOffer,
+		SDP:  sdpString,
+	}
 
 	//Set up the received remote SDP
 	//trickle ice is started as soon i set any description local or remote
-	err := pc.SetRemoteDescription(signal.SDP)
+	err := pc.SetRemoteDescription(offer)
 	if err != nil {
 		logger.Error("[Publisher] Error setting remote description:", err)
 		pc.Close()

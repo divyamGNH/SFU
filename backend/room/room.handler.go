@@ -1,11 +1,12 @@
 package room
 
 import (
+	"backend/logger"
 	"backend/participant"
 	"backend/sfu"
 	"backend/types"
 	"encoding/json"
-	"backend/logger"
+	"fmt"
 	"net/http"
 	"sync"
 
@@ -241,52 +242,16 @@ func (rh *RoomHandler) CreateRoom(w http.ResponseWriter, r *http.Request) {
 	rh.WriteJSON(w, response, http.StatusCreated)
 }
 
-func (rh *RoomHandler) JoinRoom(w http.ResponseWriter, r *http.Request) {
-
-	if r.Method != http.MethodPost {
-		rh.WriteError(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	vars := mux.Vars(r)
-
-	roomId := vars["roomId"]
-
-	clientId := uuid.NewString()
-
-	if roomId == "" {
-
-		rh.WriteError(w, "roomId is required", http.StatusBadRequest)
-
-		return
-	}
+func (rh *RoomHandler) JoinRoom(roomId string, clientId string) error {
 
 	// Get the room
 	room, ok := rh.GetRoom(roomId)
 	if !ok {
-
-		rh.WriteError(w, "No such room with this roomId exists", http.StatusNotFound)
-
-		return
+		return fmt.Errorf("No such room with roomId : %s exists", roomId)
 	}
 
 	room.Mu.Lock()
-
-	// The clientId was generated 5  lines earlier it will never be duplicate.
-
-	// _, exists := room.UserIdToClient[clientId]
-
-	// if exists {
-	// 	room.Mu.Unlock()
-
-	// 	rh.WriteError(w, "User with userId already exists", http.StatusBadRequest)
-
-	// 	return
-	// }
-
-	// User joins logically here
 	room.UserIds = append(room.UserIds, clientId)
-
 	room.Mu.Unlock()
 
 	// Add mapping userId -> roomId
@@ -294,85 +259,86 @@ func (rh *RoomHandler) JoinRoom(w http.ResponseWriter, r *http.Request) {
 	rh.UserIdToRoomId[clientId] = roomId
 	rh.Mu.Unlock()
 
-	// emit the peer-joined event to all the other connected peers in the room.
-	peerJoinedMsg := types.JoinRoomSuccessMessage{
-		Type:   "peer-joined",
-		RoomId: roomId,
-		UserId: clientId,
-	}
+	// Iris handles the peer-joined event being sent.
 
-	room.Mu.RLock()
+	// // emit the peer-joined event to all the other connected peers in the room.
+	// peerJoinedMsg := types.JoinRoomSuccessMessage{
+	// 	Type:   "peer-joined",
+	// 	RoomId: roomId,
+	// 	UserId: clientId,
+	// }
 
-	for id, client := range room.UserIdToClient {
+	// room.Mu.RLock()
 
-		// do not emit the event to the user itself
-		if id == clientId {
-			continue
-		}
+	// for id, client := range room.UserIdToClient {
+	// 	// do not emit the event to the user itself
+	// 	if id == clientId {
+	// 		continue
+	// 	}
+	// 	client.Send <- peerJoinedMsg
+	// }
 
-		client.Send <- peerJoinedMsg
-	}
+	// room.Mu.RUnlock()
 
-	room.Mu.RUnlock()
-
-	successMsg := types.JoinRoomResponse{
-		RoomId: roomId,
-		UserId: clientId,
-	}
-
-	rh.WriteJSON(w, successMsg, http.StatusOK)
+	return nil
 }
 
-func (rh *RoomHandler) LeaveRoom(w http.ResponseWriter, r *http.Request) {
+func (rh *RoomHandler) LeaveRoom(roomId string, clientId string) error {
 
-	// Ensure the method is POST method only.
-	// Once we connect to the DB we need to make this POST to DELETE
-	if r.Method != http.MethodPost {
-		rh.WriteError(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
+	err := rh.RemoveClient(roomId, clientId)
+	if err != nil {
+		return err
 	}
 
-	// Get the variables from the link.
-	vars := mux.Vars(r)
-	roomId := vars["roomId"]
-	userId := vars["clientId"]
+	// Iris handles all the ws stuff
 
-	// Check if the room even exists or not
+	// // Emit the peer-left event to all the remaining connected peers in the room.
+	// peerLeftMsg := types.LeaveRoomSuccessMessage{
+	// 	Type:   "peer-left",
+	// 	RoomId: roomId,
+	// 	UserId: clientId,
+	// }
+
+	// room.Mu.RLock()
+
+	// for id, client := range room.UserIdToClient {
+
+	// 	// Do not emit the event to the leaving user itself
+	// 	if id == userId {
+	// 		continue
+	// 	}
+
+	// 	client.Send <- peerLeftMsg
+	// }
+
+	// room.Mu.RUnlock()
+
+	return nil
+}
+
+func (rh *RoomHandler) HandleOffer(roomId string, clientId string, offerString string) (string, error) {
+
+	// Get the room.
 	room, ok := rh.GetRoom(roomId)
 	if !ok {
-		rh.WriteError(w, "No such room with this roomId exists", http.StatusNotFound)
-		return
+		return "", fmt.Errorf("Room with roomId : %s not found", roomId)
 	}
 
-	rh.RemoveClient(roomId, userId)
-
-	// Emit the peer-left event to all the remaining connected peers in the room.
-	peerLeftMsg := types.LeaveRoomSuccessMessage{
-		Type:   "peer-left",
-		RoomId: roomId,
-		UserId: userId,
-	}
-
+	// Find the client in the room.
 	room.Mu.RLock()
-
-	for id, client := range room.UserIdToClient {
-
-		// Do not emit the event to the leaving user itself
-		if id == userId {
-			continue
-		}
-
-		client.Send <- peerLeftMsg
-	}
-
+	client, ok := room.UserIdToClient[clientId]
 	room.Mu.RUnlock()
-
-	// Emit the leave-room-success response
-	successMsg := types.LeaveRoomResponse{
-		Message: "Left room successfully",
+	if !ok {
+		return "", fmt.Errorf("Client with clientId : %s not found in the room", clientId)
 	}
 
-	rh.WriteJSON(w, successMsg, http.StatusOK)
+	// Call the Publisher.
+	answer, err := client.Publisher.HandleOffer(offerString)
+	if err != nil {
+		return "", err
+	}
+
+	return answer.SDP, nil
 }
 
 func (r *Room) AddPublishedTracks(track *participant.PublishedTrack, receiver *sfu.Receiver) {
@@ -558,11 +524,11 @@ func (rh *RoomHandler) CleanRoom(roomId string) {
 	logger.Infof("[Room] Room with roomid : %v has been deleted", roomId)
 }
 
-func (rh *RoomHandler) RemoveClient(roomId string, userId string) {
+func (rh *RoomHandler) RemoveClient(roomId string, userId string) error {
 	// Get the room
 	room, ok := rh.GetRoom(roomId)
 	if !ok {
-		return
+		return fmt.Errorf("No room with roomId : %s found", roomId)
 	}
 
 	room.Mu.Lock()
@@ -604,6 +570,7 @@ func (rh *RoomHandler) RemoveClient(roomId string, userId string) {
 	rh.Mu.Unlock()
 
 	rh.CleanRoom(roomId)
+	return nil
 }
 
 // OnNegotiationCompleted is called when a subscriber finishes its WebRTC offer/answer negotiation.
