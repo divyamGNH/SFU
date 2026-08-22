@@ -12,9 +12,9 @@ import (
 
 type RoomCallbacks struct {
 	OnMediaPublished           func(clientId string, mid string, publisherId string)
-	SendPublisherICECandidate  func(clientId string, candidate webrtc.ICECandidateInit)
-	SendSubscriberICECandidate func(clientId string, candidate webrtc.ICECandidateInit)
-	SendSubscriberOffer        func(clientId string, offer webrtc.SessionDescription)
+	SendPublisherICECandidate  func(roomId string, clientId string, candidate webrtc.ICECandidateInit)
+	SendSubscriberICECandidate func(roomId string, clientId string, candidate webrtc.ICECandidateInit)
+	SendSubscriberOffer        func(roomId string, clientId string, offer webrtc.SessionDescription)
 }
 
 type RoomHandler struct {
@@ -88,7 +88,7 @@ func (rh *RoomHandler) JoinRoom(roomId string, clientId string) error {
 			},
 			SendPublisherICECandidate: func(client *participant.Client, candidate webrtc.ICECandidateInit) {
 				if rh.callbacks.SendPublisherICECandidate != nil {
-					rh.callbacks.SendPublisherICECandidate(client.UserId, candidate)
+					rh.callbacks.SendPublisherICECandidate(roomId, client.UserId, candidate)
 				}
 			},
 		},
@@ -99,12 +99,12 @@ func (rh *RoomHandler) JoinRoom(roomId string, clientId string) error {
 			},
 			SendSubscriberICECandidate: func(client *participant.Client, candidate webrtc.ICECandidateInit) {
 				if rh.callbacks.SendSubscriberICECandidate != nil {
-					rh.callbacks.SendSubscriberICECandidate(client.UserId, candidate)
+					rh.callbacks.SendSubscriberICECandidate(roomId, client.UserId, candidate)
 				}
 			},
 			SendSubscriberOffer: func(client *participant.Client, offer webrtc.SessionDescription) {
 				if rh.callbacks.SendSubscriberOffer != nil {
-					rh.callbacks.SendSubscriberOffer(client.UserId, offer)
+					rh.callbacks.SendSubscriberOffer(roomId, client.UserId, offer)
 				}
 			},
 		},
@@ -139,29 +139,40 @@ func (rh *RoomHandler) LeaveRoom(roomId string, clientId string) error {
 	return nil
 }
 
-func (rh *RoomHandler) HandleOffer(roomId string, clientId string, offerString string) (string, error) {
-
-	// Get the room.
-	room, ok := rh.GetRoom(roomId)
+func (rh *RoomHandler) HandleOffer(clientId string, offerString string) (webrtc.SessionDescription, error) {
+	client, ok := rh.GetClientFromUserId(clientId)
 	if !ok {
-		return "", fmt.Errorf("Room with roomId : %s not found", roomId)
-	}
-
-	// Find the client in the room.
-	room.Mu.RLock()
-	client, ok := room.UserIdToClient[clientId]
-	room.Mu.RUnlock()
-	if !ok {
-		return "", fmt.Errorf("Client with clientId : %s not found in the room", clientId)
+		return webrtc.SessionDescription{}, fmt.Errorf("Client with clientId : %s not found in the room", clientId)
 	}
 
 	// Call the Publisher.
 	answer, err := client.Publisher.HandleOffer(offerString)
 	if err != nil {
-		return "", err
+		return webrtc.SessionDescription{}, err
 	}
 
-	return answer.SDP, nil
+	return answer, nil
+}
+
+func (rh *RoomHandler) HandleAnswer(clientId string, answerString string) error {
+	// Get the client.
+	client, ok := rh.GetClientFromUserId(clientId)
+	if !ok {
+		return fmt.Errorf("Client with clientId : %s not found in the room", clientId)
+	}
+
+	// create answer
+	answer := webrtc.SessionDescription{
+		Type: webrtc.SDPTypeAnswer,
+		SDP:  answerString,
+	}
+
+	// Pass it to the subscriber!
+	err := client.Subscriber.HandleAnswer(answer)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (r *Room) AddPublishedTracks(track *participant.PublishedTrack, receiver *sfu.Receiver) {
@@ -361,4 +372,24 @@ func (rh *RoomHandler) RemoveClient(roomId string, userId string) error {
 // We trigger SendRemoteMediaToLocalPeer to retry publishing any tracks that were blocked waiting for a transceiver.
 func (rh *RoomHandler) OnNegotiationCompleted(client *participant.Client) {
 	rh.SendRemoteMediaToLocalPeer(client)
+}
+
+func (rh *RoomHandler) HandlePublisherICECandidate(clientId string, candidate webrtc.ICECandidateInit) error {
+	client, ok := rh.GetClientFromUserId(clientId)
+	if !ok {
+		return fmt.Errorf("Client with id : %v was not found", clientId)
+	}
+
+	client.Publisher.HandleICECandidate(candidate)
+	return nil
+}
+
+func (rh *RoomHandler) HandleSubscriberICECandidate(clientId string, candidate webrtc.ICECandidateInit) error {
+	client, ok := rh.GetClientFromUserId(clientId)
+	if !ok {
+		return fmt.Errorf("Client with id : %v was not found", clientId)
+	}
+
+	client.Subscriber.HandleIce(candidate)
+	return nil
 }

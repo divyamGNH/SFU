@@ -176,7 +176,7 @@ func (p *Publisher) HandleOffer(sdpString string) (webrtc.SessionDescription, er
 	return answer, nil
 }
 
-func (p *Publisher) HandleICECandidate(candidate webrtc.ICECandidateInit, client *Client) {
+func (p *Publisher) HandleICECandidate(candidate webrtc.ICECandidateInit) {
 	p.Mu.Lock()
 
 	logger.Infof("[Publisher] Received ICE candidate: %+v", candidate)

@@ -96,11 +96,11 @@ func (ic *IrisClient) receiverLoop(stream control.SFUControl_ConnectClient) {
 		case *control.Message_SubscriberAnswer:
 			ic.service.OnSubscriberAnswer(payload.SubscriberAnswer)
 
-		case *control.Message_PublisherIceCandidate:
-			ic.service.OnPublisherICECandidate(payload.PublisherIceCandidate)
+		case *control.Message_ClientPublisherIce:
+			ic.service.OnPublisherICECandidate(payload.ClientPublisherIce)
 
-		case *control.Message_SubscriberIceCandidate:
-			ic.service.OnSubscriberICECandidate(payload.SubscriberIceCandidate)
+		case *control.Message_ClientSubscriberIce:
+			ic.service.OnSubscriberICECandidate(payload.ClientSubscriberIce)
 
 		default:
 			log.Printf("Received unknown message type from Iris: %T", payload)
