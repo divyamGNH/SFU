@@ -4,20 +4,24 @@ import (
 	"backend/logger"
 	"backend/participant"
 	"backend/sfu"
-	"backend/types"
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"sync"
 
-	"github.com/google/uuid"
-	"github.com/gorilla/mux"
+	"github.com/pion/webrtc/v3"
 )
+
+type RoomCallbacks struct {
+	OnMediaPublished           func(clientId string, mid string, publisherId string)
+	SendPublisherICECandidate  func(clientId string, candidate webrtc.ICECandidateInit)
+	SendSubscriberICECandidate func(clientId string, candidate webrtc.ICECandidateInit)
+	SendSubscriberOffer        func(clientId string, offer webrtc.SessionDescription)
+}
 
 type RoomHandler struct {
 	RoomIdToRoom   map[string]*Room
 	UserIdToRoomId map[string]string
 	Mu             sync.RWMutex
+	callbacks      RoomCallbacks
 }
 
 type Room struct {
@@ -39,178 +43,13 @@ func NewRoomHandler() *RoomHandler {
 	}
 }
 
-//Helper functions.
-
-func (rh *RoomHandler) BroadcastMessage(msg any, client *participant.Client) {
-	roomId := client.RoomId
-	userId := client.UserId
-
-	// Get other peers from the room
-	otherPeers, ok := rh.GetOtherPeersFromARoom(roomId, userId)
-	if !ok {
-		logger.Errorf("Error braodcasting socket event roomId : %s and userId : %s", roomId, userId)
-		return
-	}
-
-	for _, peer := range otherPeers {
-		ok := peer.SafeSend(msg)
-		if !ok {
-			logger.Errorf("Error sending the broadcast message to peer : %s from cliendId : %s", peer.UserId, userId)
-		}
-	}
+func (rh *RoomHandler) SetCallbacks(callbacks RoomCallbacks) {
+	rh.callbacks = callbacks
 }
 
-func (rh *RoomHandler) WriteJSON(w http.ResponseWriter, message any, statusCode int) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
-
-	err := json.NewEncoder(w).Encode(message)
-
-	if err != nil {
-		logger.Error("[JoinRoom] Error encoding error response:", err)
-	}
-}
-
-func (rh *RoomHandler) WriteError(w http.ResponseWriter, message string, statusCode int) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
-
-	err := json.NewEncoder(w).Encode(types.ErrorResponse{
-		Message: message,
-	})
-
-	if err != nil {
-		logger.Error("[JoinRoom] Error encoding error response:", err)
-	}
-}
-
-// Generate a unique roomId and return it as well.
-func (rh *RoomHandler) RoomIdGenerator() string {
-	return uuid.NewString()
-}
-
-// Find the room using its roomId.
-func (rh *RoomHandler) GetRoom(roomId string) (*Room, bool) {
-	rh.Mu.RLock()
-	room, ok := rh.RoomIdToRoom[roomId]
-	rh.Mu.RUnlock()
-	return room, ok
-}
-
-// Find the roomId for a given userId
-func (rh *RoomHandler) RoomIdForUser(userId string) (string, bool) {
-	rh.Mu.RLock()
-	roomId, ok := rh.UserIdToRoomId[userId]
-	rh.Mu.RUnlock()
-
-	return roomId, ok
-}
-
-func (rh *RoomHandler) GetClientFromUserId(userId string) (*participant.Client, bool) {
-	// Get the roomId for this user
-	roomId, ok := rh.RoomIdForUser(userId)
-	if !ok {
-		logger.Info("[ROOM] No room found for this userId")
-		return nil, false
-	}
-
-	// Get the room using the roomId
-	room, ok := rh.GetRoom(roomId)
-	if !ok {
-		logger.Info("[ROOM] Room does not exist")
-		return nil, false
-	}
-
-	// Get the client from the room
-	room.Mu.RLock()
-	client, exists := room.UserIdToClient[userId]
-	room.Mu.RUnlock()
-
-	if !exists {
-		logger.Info("[ROOM] Client not found in room")
-		return nil, false
-	}
-
-	return client, true
-}
-
-func (rh *RoomHandler) GetOtherPeersFromARoom(roomId string, userId string) ([]*participant.Client, bool) {
-	//get the room
-	logger.Info("Getting peers from the room")
-	room, ok := rh.GetRoom(roomId)
-
-	if !ok {
-		logger.Error("Error while getting other peers from a room")
-		return nil, false
-	}
-
-	//read the clients map from the room.UserIdToRoomId and return all the users except the userId from the parameters
-
-	var otherUsers []*participant.Client
-
-	room.Mu.Lock()
-	for id, client := range room.UserIdToClient {
-		if id == userId {
-			continue
-		}
-		otherUsers = append(otherUsers, client)
-	}
-	room.Mu.Unlock()
-
-	return otherUsers, true
-}
-
-//Actual routed and ws functions.
-
-// route will be /viewroom.
-func (rh *RoomHandler) ViewRoom(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-
-	roomId := vars["roomId"]
-	// clientId := vars["clientId"]
-
-	room, ok := rh.GetRoom(roomId)
-	if !ok {
-		logger.Error("[RoomH] Error while getting other peers from a room")
-		rh.WriteError(w, "Room not found", http.StatusNotFound)
-		return
-	}
-
-	var otherPeers []types.PeerState
-	room.Mu.RLock()
-	for _, client := range room.UserIdToClient {
-		// if client.UserId == clientId {
-		// 	continue
-		// }
-
-		client.Mu.RLock()
-		state := types.PeerState{
-			UserId:    client.UserId,
-			AudioBool: client.AudioBool,
-			VideoBool: client.VideoBool,
-		}
-		client.Mu.RUnlock()
-
-		otherPeers = append(otherPeers, state)
-	}
-	room.Mu.RUnlock()
-
-	response := types.ViewRoomResponse{
-		OtherPeers: otherPeers,
-	}
-
-	rh.WriteJSON(w, response, http.StatusOK)
-}
-
-func (rh *RoomHandler) CreateRoom(w http.ResponseWriter, r *http.Request) {
-
-	if r.Method != http.MethodPost {
-		rh.WriteError(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	clientId := uuid.NewString()
-	roomId := rh.RoomIdGenerator()
+// Iris calls this function when a client requests create-room then iris gets the room and calls joinroom on it that is why we dont actually put any data realted to user in the create-room function.
+// Iris sends the roomId so we dont need to create roomId anymore.
+func (rh *RoomHandler) CreateRoom(roomId string) *Room {
 
 	room := &Room{
 		RoomId:                   roomId,
@@ -224,94 +63,78 @@ func (rh *RoomHandler) CreateRoom(w http.ResponseWriter, r *http.Request) {
 	// Add roomId -> room
 	rh.Mu.Lock()
 	rh.RoomIdToRoom[roomId] = room
-
-	// Add userId -> roomId
-	rh.UserIdToRoomId[clientId] = roomId
 	rh.Mu.Unlock()
 
-	// Store the creator in room membership list
-	room.Mu.Lock()
-	room.UserIds = append(room.UserIds, clientId)
-	room.Mu.Unlock()
-
-	response := types.CreateRoomResponse{
-		RoomId: roomId,
-		UserId: clientId,
-	}
-
-	rh.WriteJSON(w, response, http.StatusCreated)
+	return room
 }
 
 func (rh *RoomHandler) JoinRoom(roomId string, clientId string) error {
-
 	// Get the room
 	room, ok := rh.GetRoom(roomId)
 	if !ok {
 		return fmt.Errorf("No such room with roomId : %s exists", roomId)
 	}
 
+	// Define the callbacks.
+	// Some callbacks we passing come from room callbacks that come from the service file in the grpc package.
+	callbacks := participant.ClientCallbacks{
+		GetIceServers: func() []webrtc.ICEServer {
+			return []webrtc.ICEServer{} // TODO: Fetch from config later
+		},
+
+		PubCallbacks: participant.PublisherCallbacks{
+			OnTrackPublished: func(track *participant.PublishedTrack, client *participant.Client) {
+				rh.OnTrackPublished(track, client)
+			},
+			SendPublisherICECandidate: func(client *participant.Client, candidate webrtc.ICECandidateInit) {
+				if rh.callbacks.SendPublisherICECandidate != nil {
+					rh.callbacks.SendPublisherICECandidate(client.UserId, candidate)
+				}
+			},
+		},
+
+		SubCallbacks: participant.SubscriberCallbacks{
+			OnNegotiationCompleted: func(client *participant.Client) {
+				rh.OnNegotiationCompleted(client)
+			},
+			SendSubscriberICECandidate: func(client *participant.Client, candidate webrtc.ICECandidateInit) {
+				if rh.callbacks.SendSubscriberICECandidate != nil {
+					rh.callbacks.SendSubscriberICECandidate(client.UserId, candidate)
+				}
+			},
+			SendSubscriberOffer: func(client *participant.Client, offer webrtc.SessionDescription) {
+				if rh.callbacks.SendSubscriberOffer != nil {
+					rh.callbacks.SendSubscriberOffer(client.UserId, offer)
+				}
+			},
+		},
+	}
+
+	// Create a new client.
+	newClient, err := participant.NewClient(roomId, clientId, callbacks)
+	if err != nil {
+		return err
+	}
+
+	// Update the maps.
 	room.Mu.Lock()
+	room.UserIdToClient[clientId] = newClient
 	room.UserIds = append(room.UserIds, clientId)
 	room.Mu.Unlock()
 
-	// Add mapping userId -> roomId
 	rh.Mu.Lock()
 	rh.UserIdToRoomId[clientId] = roomId
 	rh.Mu.Unlock()
-
-	// Iris handles the peer-joined event being sent.
-
-	// // emit the peer-joined event to all the other connected peers in the room.
-	// peerJoinedMsg := types.JoinRoomSuccessMessage{
-	// 	Type:   "peer-joined",
-	// 	RoomId: roomId,
-	// 	UserId: clientId,
-	// }
-
-	// room.Mu.RLock()
-
-	// for id, client := range room.UserIdToClient {
-	// 	// do not emit the event to the user itself
-	// 	if id == clientId {
-	// 		continue
-	// 	}
-	// 	client.Send <- peerJoinedMsg
-	// }
-
-	// room.Mu.RUnlock()
 
 	return nil
 }
 
 func (rh *RoomHandler) LeaveRoom(roomId string, clientId string) error {
-
+	// Clear user related maps.
 	err := rh.RemoveClient(roomId, clientId)
 	if err != nil {
 		return err
 	}
-
-	// Iris handles all the ws stuff
-
-	// // Emit the peer-left event to all the remaining connected peers in the room.
-	// peerLeftMsg := types.LeaveRoomSuccessMessage{
-	// 	Type:   "peer-left",
-	// 	RoomId: roomId,
-	// 	UserId: clientId,
-	// }
-
-	// room.Mu.RLock()
-
-	// for id, client := range room.UserIdToClient {
-
-	// 	// Do not emit the event to the leaving user itself
-	// 	if id == userId {
-	// 		continue
-	// 	}
-
-	// 	client.Send <- peerLeftMsg
-	// }
-
-	// room.Mu.RUnlock()
 
 	return nil
 }
@@ -366,36 +189,6 @@ func (rh *RoomHandler) OnTrackPublished(track *participant.PublishedTrack, clien
 	rh.SendLocalMediaToRemotePeers(client)
 }
 
-func (rh *RoomHandler) HandleToggleAudio(muted bool, client *participant.Client) {
-	client.Mu.Lock()
-	client.AudioBool = muted
-	client.Mu.Unlock()
-
-	msg := &types.AudioToggleMessageRes{
-		Type:   "audio-toggle",
-		UserId: client.UserId,
-		Muted:  client.AudioBool,
-	}
-
-	// Send a event to the other peers in the room so that they can update their UI.
-	rh.BroadcastMessage(msg, client)
-}
-
-func (rh *RoomHandler) HandleToggleVideo(muted bool, client *participant.Client) {
-	client.Mu.Lock()
-	client.VideoBool = muted
-	client.Mu.Unlock()
-
-	msg := &types.VideoToggleMessageRes{
-		Type:   "video-toggle",
-		UserId: client.UserId,
-		Muted:  client.VideoBool,
-	}
-
-	// Send a event to the other peers in the room so that they can update their UI.
-	rh.BroadcastMessage(msg, client)
-}
-
 func (rh *RoomHandler) publishTrackToSubscriber(subscriber *participant.Client, track *participant.PublishedTrack) (bool, bool, error) {
 	needsNegotiation, alreadyPublished, slot, err := subscriber.Subscriber.SubscribeToTrack(track)
 
@@ -418,13 +211,10 @@ func (rh *RoomHandler) publishTrackToSubscriber(subscriber *participant.Client, 
 		go fwd.DrainRTCP()
 	}
 
-	// Send the MID mapping to the frontend.
-	msg := types.PublishMediaMessage{
-		Type:      "media-published",
-		Mid:       slot.Transceiver.Mid(),
-		Publisher: track.PublisherID,
+	// Trigger the callback to service.go to notify the Iris about the status so that it can actually publish media-published event with mid mapping.
+	if rh.callbacks.OnMediaPublished != nil {
+		rh.callbacks.OnMediaPublished(subscriber.UserId, slot.Transceiver.Mid(), track.PublisherID)
 	}
-	subscriber.SafeSend(msg)
 
 	return false, false, nil
 }
@@ -554,15 +344,9 @@ func (rh *RoomHandler) RemoveClient(roomId string, userId string) error {
 
 	room.Mu.Unlock()
 
-	// Send a peer-left ws message.
-	peerLeftMsg := types.LeaveRoomSuccessMessage{
-		Type:   "peer-left",
-		RoomId: roomId,
-		UserId: userId,
-	}
-
+	// Clean the client up to prevent memory leaks.
 	if clientExists {
-		rh.BroadcastMessage(peerLeftMsg, client)
+		client.CleanUpClient()
 	}
 
 	rh.Mu.Lock()

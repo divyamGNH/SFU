@@ -1,6 +1,7 @@
 package signalling
 
 import (
+	"backend/service"
 	"context"
 	"fmt"
 	"log"
@@ -18,13 +19,14 @@ type IrisClient struct {
 	conn       *grpc.ClientConn
 	grpcClient control.SFUControlClient
 	stream     control.SFUControl_ConnectClient
+	service    *service.Service
 
 	send     chan *control.Message
 	done     chan any
 	streamMu sync.RWMutex
 }
 
-func NewIrisClient(serverAddress string) (*IrisClient, error) {
+func NewIrisClient(serverAddress string, service *service.Service) (*IrisClient, error) {
 	// Create a gRPC connection to Iris here.
 	// TODOINPROD : Here we used insecure creds for local development but we need to use TLS when we go in prod.
 	conn, err := grpc.NewClient(serverAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -38,6 +40,7 @@ func NewIrisClient(serverAddress string) (*IrisClient, error) {
 	return &IrisClient{
 		conn:       conn,
 		grpcClient: client,
+		service:    service,
 		send:       make(chan *control.Message, 100),
 	}, nil
 }
@@ -80,7 +83,28 @@ func (ic *IrisClient) receiverLoop(stream control.SFUControl_ConnectClient) {
 		log.Println("Received a message from the stream")
 
 		// Add the switch case to decode the message from the types etc like ws.
-		_ = msg
+		switch payload := msg.Payload.(type) {
+		case *control.Message_JoinRoom:
+			ic.service.OnJoinRoom(payload.JoinRoom)
+
+		case *control.Message_LeaveRoom:
+			ic.service.OnLeaveRoom(payload.LeaveRoom)
+
+		case *control.Message_PublisherOffer:
+			ic.service.OnPublisherOffer(payload.PublisherOffer)
+
+		case *control.Message_SubscriberAnswer:
+			ic.service.OnSubscriberAnswer(payload.SubscriberAnswer)
+
+		case *control.Message_PublisherIceCandidate:
+			ic.service.OnPublisherICECandidate(payload.PublisherIceCandidate)
+
+		case *control.Message_SubscriberIceCandidate:
+			ic.service.OnSubscriberICECandidate(payload.SubscriberIceCandidate)
+
+		default:
+			log.Printf("Received unknown message type from Iris: %T", payload)
+		}
 	}
 }
 

@@ -2,7 +2,6 @@ package participant
 
 import (
 	"backend/logger"
-	"backend/types"
 	"fmt"
 	"sync"
 
@@ -14,7 +13,7 @@ type Publisher struct {
 	PC                *webrtc.PeerConnection
 	client            *Client
 	RemoteDescSet     bool
-	PendingCandidates []types.ICECandidateMessage
+	PendingCandidates []webrtc.ICECandidateInit
 	callbacks         PublisherCallbacks
 
 	Mu sync.RWMutex
@@ -50,7 +49,7 @@ func NewPublisher(iceServers []webrtc.ICEServer, callbacks PublisherCallbacks, c
 		PC:                pc,
 		client:            client,
 		RemoteDescSet:     false,
-		PendingCandidates: make([]types.ICECandidateMessage, 0),
+		PendingCandidates: make([]webrtc.ICECandidateInit, 0),
 		callbacks:         callbacks,
 	}
 
@@ -93,22 +92,14 @@ func NewPublisher(iceServers []webrtc.ICEServer, callbacks PublisherCallbacks, c
 	})
 
 	pc.OnICECandidate(func(candidate *webrtc.ICECandidate) {
-
 		if candidate == nil {
 			return
 		}
 
 		//Convert webrtc.ICECandidate to webrtc.ICECandidateInit
-		candidateJSON := candidate.ToJSON()
+		candidateInit := candidate.ToJSON()
 
-		// Create a object to send to the frontend
-		msg := types.ICECandidateMessage{
-			Type:         "ice-candidate",
-			ICECandidate: candidateJSON,
-		}
-
-		// Emit a socket event for frontend to catch this ice candidate
-		p.client.SafeSend(msg)
+		p.callbacks.SendPublisherICECandidate(p.client, candidateInit)
 	})
 
 	return p, nil
@@ -123,7 +114,7 @@ func (p *Publisher) FlushICECandidateQueue() {
 		return
 	}
 
-	candidates := append([]types.ICECandidateMessage(nil), p.PendingCandidates...)
+	candidates := append([]webrtc.ICECandidateInit(nil), p.PendingCandidates...)
 
 	//Empty the queue.
 	p.PendingCandidates = nil
@@ -133,7 +124,7 @@ func (p *Publisher) FlushICECandidateQueue() {
 
 	for _, candidate := range candidates {
 		//Add the Ice candidate to the queue and wait for the remote description to set.
-		err := p.PC.AddICECandidate(candidate.ICECandidate)
+		err := p.PC.AddICECandidate(candidate)
 		if err != nil {
 			logger.Error("[HandleICECandidate] Error adding ICE candidate to the queue:", err)
 			continue
@@ -185,10 +176,10 @@ func (p *Publisher) HandleOffer(sdpString string) (webrtc.SessionDescription, er
 	return answer, nil
 }
 
-func (p *Publisher) HandleICECandidate(candidate types.ICECandidateMessage, client *Client) {
+func (p *Publisher) HandleICECandidate(candidate webrtc.ICECandidateInit, client *Client) {
 	p.Mu.Lock()
 
-	logger.Infof("[Publisher] Received ICE candidate: %+v", candidate.ICECandidate)
+	logger.Infof("[Publisher] Received ICE candidate: %+v", candidate)
 
 	if !p.RemoteDescSet {
 		logger.Info("[Publisher] Remote description not set yet, queuing candidate")
@@ -198,7 +189,7 @@ func (p *Publisher) HandleICECandidate(candidate types.ICECandidateMessage, clie
 	}
 	p.Mu.Unlock()
 
-	err := p.PC.AddICECandidate(candidate.ICECandidate)
+	err := p.PC.AddICECandidate(candidate)
 	if err != nil {
 		logger.Error("[Publisher] Error adding ICE candidate to the PC:", err)
 		return

@@ -1,10 +1,9 @@
 package participant
 
 import (
-	"backend/sfu/pool"
-	"backend/types"
-	"fmt"
 	"backend/logger"
+	"backend/sfu/pool"
+	"fmt"
 	"sync"
 	"time"
 
@@ -15,7 +14,7 @@ type Subscriber struct {
 	PC                 *webrtc.PeerConnection
 	client             *Client
 	RemoteDescSet      bool
-	PendingCandidates  []types.ICECandidateMessage
+	PendingCandidates  []webrtc.ICECandidateInit
 	currentGeneration  uint64
 	inflightGeneration uint64
 	VideoPool          *pool.Pool
@@ -59,7 +58,7 @@ func NewSubscriber(iceServers []webrtc.ICEServer, callbacks SubscriberCallbacks,
 		PC:                 pc,
 		client:             client,
 		RemoteDescSet:      false,
-		PendingCandidates:  make([]types.ICECandidateMessage, 0, 256),
+		PendingCandidates:  make([]webrtc.ICECandidateInit, 0, 256),
 		currentGeneration:  1,
 		inflightGeneration: 1,
 		VideoPool:          pool.NewPool(),
@@ -80,16 +79,9 @@ func NewSubscriber(iceServers []webrtc.ICEServer, callbacks SubscriberCallbacks,
 		}
 
 		//Convert webrtc.ICECandidate to webrtc.ICECandidateInit
-		candidateJSON := candidate.ToJSON()
+		candidateInit := candidate.ToJSON()
 
-		// Create a object to send to the frontend
-		msg := types.ICECandidateMessage{
-			Type:         "subscriber-ice-candidate",
-			ICECandidate: candidateJSON,
-		}
-
-		// Emit a socket event for frontend to catch this ice candidate
-		client.SafeSend(msg)
+		sub.callbacks.SendSubscriberICECandidate(sub.client, candidateInit)
 	})
 
 	sub.PC.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
@@ -150,11 +142,7 @@ func (s *Subscriber) createAndSendOffer() {
 		return
 	}
 
-	msg := types.SubscriberOfferMessage{
-		Type: "subscriber-offer",
-		SDP:  offer,
-	}
-	s.client.SafeSend(msg)
+	s.callbacks.SendSubscriberOffer(s.client, offer)
 }
 
 func (s *Subscriber) clearNegotiating() {
@@ -174,7 +162,7 @@ func (s *Subscriber) FlushICECandidateQueue() {
 	}
 
 	// candidate is already of type ICECandidateInit
-	candidates := append([]types.ICECandidateMessage(nil), s.PendingCandidates...)
+	candidates := append([]webrtc.ICECandidateInit(nil), s.PendingCandidates...)
 
 	//Empty the queue.
 	s.PendingCandidates = nil
@@ -183,7 +171,7 @@ func (s *Subscriber) FlushICECandidateQueue() {
 
 	for _, candidate := range candidates {
 		//Add the Ice candidate to the queue and wait for the remote description to set.
-		err := s.PC.AddICECandidate(candidate.ICECandidate)
+		err := s.PC.AddICECandidate(candidate)
 		if err != nil {
 			logger.Error("[HandleICECandidate] Error adding subscriber ICE candidate to the queue:", err)
 			continue
@@ -191,13 +179,12 @@ func (s *Subscriber) FlushICECandidateQueue() {
 	}
 }
 
-func (s *Subscriber) HandleAnswer(answer *types.SubscriberAnswerMessage) error {
+func (s *Subscriber) HandleAnswer(answerSdp webrtc.SessionDescription) error {
 	logger.Infof("Subscriber answer from %s", s.client.UserId)
-	remoteSDP := answer.SDP
 
 	subscriberPc := s.PC
 
-	err := subscriberPc.SetRemoteDescription(remoteSDP)
+	err := subscriberPc.SetRemoteDescription(answerSdp)
 	if err != nil {
 		return err
 	}
@@ -232,7 +219,7 @@ func (s *Subscriber) HandleAnswer(answer *types.SubscriberAnswerMessage) error {
 	return nil
 }
 
-func (s *Subscriber) HandleIce(iceMessage types.ICECandidateMessage) {
+func (s *Subscriber) HandleIce(iceMessage webrtc.ICECandidateInit) {
 	s.Mu.Lock()
 	if s == nil || s.PC == nil || !s.RemoteDescSet {
 		s.PendingCandidates = append(s.PendingCandidates, iceMessage)
@@ -241,7 +228,7 @@ func (s *Subscriber) HandleIce(iceMessage types.ICECandidateMessage) {
 	}
 
 	subscriberPc := s.PC
-	iceCandidate := iceMessage.ICECandidate
+	iceCandidate := iceMessage
 	s.Mu.Unlock()
 
 	err := subscriberPc.AddICECandidate(iceCandidate)
