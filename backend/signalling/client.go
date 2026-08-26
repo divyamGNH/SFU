@@ -46,8 +46,7 @@ func NewIrisClient(serverAddress string, service *service.Service) (*IrisClient,
 }
 
 func (ic *IrisClient) Start() error {
-	// Call the Connect() function to obtain the stream from the iris gRPC connection
-
+	// Call the Connect() function to obtain the stream from the iris gRPC connection.
 	stream, err := ic.grpcClient.Connect(context.Background())
 	if err != nil {
 		return err

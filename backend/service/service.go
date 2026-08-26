@@ -8,6 +8,7 @@ import (
 	"github.com/pion/webrtc/v3"
 )
 
+// Implemented by the signalling package.
 type MessageSender interface {
 	SendMessageToIris(msg *control.Message) error
 }
@@ -17,9 +18,9 @@ type Service struct {
 	roomHandler *room.RoomHandler
 }
 
-func NewService(msgSender MessageSender, roomHandler *room.RoomHandler) *Service {
+// Create a new service without the message sender.
+func NewService(roomHandler *room.RoomHandler) *Service {
 	return &Service{
-		msgSender:   msgSender,
 		roomHandler: roomHandler,
 	}
 }
