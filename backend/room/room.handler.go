@@ -69,10 +69,12 @@ func (rh *RoomHandler) CreateRoom(roomId string) *Room {
 }
 
 func (rh *RoomHandler) JoinRoom(roomId string, clientId string) error {
-	// Get the room
+	logger.Infof("[RoomHandler] JoinRoom called (room: %s, client: %s)", roomId, clientId)
+	// Get the room, create if it doesn't exist
 	room, ok := rh.GetRoom(roomId)
 	if !ok {
-		return fmt.Errorf("No such room with roomId : %s exists", roomId)
+		logger.Errorf("No such room with roomId : %s exists", roomId)
+		room = rh.CreateRoom(roomId)
 	}
 
 	// Define the callbacks.
@@ -126,10 +128,15 @@ func (rh *RoomHandler) JoinRoom(roomId string, clientId string) error {
 	rh.UserIdToRoomId[clientId] = roomId
 	rh.Mu.Unlock()
 
+	// Subscribe the new client to any tracks already published by other peers in the room.
+	// Without this, a late joiner would never see media from participants who joined earlier.
+	rh.SendRemoteMediaToLocalPeer(newClient)
+
 	return nil
 }
 
 func (rh *RoomHandler) LeaveRoom(roomId string, clientId string) error {
+	logger.Infof("[RoomHandler] LeaveRoom called (room: %s, client: %s)", roomId, clientId)
 	// Clear user related maps.
 	err := rh.RemoveClient(roomId, clientId)
 	if err != nil {
@@ -186,6 +193,7 @@ func (r *Room) AddPublishedTracks(track *participant.PublishedTrack, receiver *s
 }
 
 func (rh *RoomHandler) OnTrackPublished(track *participant.PublishedTrack, client *participant.Client) {
+	logger.Infof("[RoomHandler] OnTrackPublished for client: %s (track: %s)", client.UserId, track.TrackID)
 	room, ok := rh.GetRoom(client.RoomId)
 	if !ok {
 		logger.Error("[RoomHandler] Error: Room not found for OnTrack")
@@ -204,8 +212,10 @@ func (rh *RoomHandler) publishTrackToSubscriber(subscriber *participant.Client, 
 	needsNegotiation, alreadyPublished, slot, err := subscriber.Subscriber.SubscribeToTrack(track)
 
 	if needsNegotiation || alreadyPublished || err != nil {
+		logger.Infof("[RoomHandler] Subscribe result (subscriber=%s publisher=%s track=%s needsNegotiation=%t alreadyPublished=%t err=%v)", subscriber.UserId, track.PublisherID, track.TrackID, needsNegotiation, alreadyPublished, err)
 		return needsNegotiation, alreadyPublished, err
 	}
+	logger.Infof("[RoomHandler] Assigned track to subscriber (subscriber=%s publisher=%s track=%s mid=%s)", subscriber.UserId, track.PublisherID, track.TrackID, slot.Transceiver.Mid())
 
 	// Get the room.
 	room, _ := rh.GetRoom(subscriber.RoomId)
@@ -224,6 +234,7 @@ func (rh *RoomHandler) publishTrackToSubscriber(subscriber *participant.Client, 
 
 	// Trigger the callback to service.go to notify the Iris about the status so that it can actually publish media-published event with mid mapping.
 	if rh.callbacks.OnMediaPublished != nil {
+		logger.Infof("[RoomHandler] Emitting media-published mapping (subscriber=%s publisher=%s mid=%s)", subscriber.UserId, track.PublisherID, slot.Transceiver.Mid())
 		rh.callbacks.OnMediaPublished(subscriber.UserId, slot.Transceiver.Mid(), track.PublisherID)
 	}
 

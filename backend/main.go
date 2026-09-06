@@ -36,7 +36,13 @@ func main() {
 	// Set the message sender that can talk to gRPC layer that talks to Iris.
 	sfuService.SetMessageSender(grpcClient)
 
+	// Set the room handler to set up callbacks for allowing SFU node to talk to Iris.
+	sfuService.SetUpRoomHandlerCallbacks()
+
 	// Start the gRPC server.
 	// It creates it own goroutines so we dont need to initialize this as a seperate goroutine.
 	grpcClient.Start()
+
+	// Block the main goroutine from exiting so the background gRPC routines keep running
+	select {}
 }

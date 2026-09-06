@@ -183,7 +183,7 @@ export default function WaitingPage() {
   };
 
   // To toggle either audio or video.
-  const toggleLocalTrackEnabled = (kind: "audio" | "video") : boolean | null => {
+  const toggleLocalTrackEnabled = (kind: "audio" | "video"): boolean | null => {
     // Get the localstream.
     const stream = localStreamRef.current;
     if (!stream) return null;
@@ -209,20 +209,20 @@ export default function WaitingPage() {
 
   function handleToggleMic() {
     const muted = toggleLocalTrackEnabled("audio");
-    if(muted == null) return;
+    if (muted == null) return;
 
     sendMessage({
-      type : "audio-toggle",
+      type: "audio-toggle",
       muted
     });
   }
 
   function handleToggleVideo() {
     const muted = toggleLocalTrackEnabled("video");
-    if(muted == null) return;
+    if (muted == null) return;
 
     sendMessage({
-      type : "video-toggle",
+      type: "video-toggle",
       muted
     })
   }

@@ -49,15 +49,16 @@ func (ic *IrisClient) Start() error {
 	// Call the Connect() function to obtain the stream from the iris gRPC connection.
 	stream, err := ic.grpcClient.Connect(context.Background())
 	if err != nil {
-		return err
+		log.Printf("Initial connection to Iris failed: %v, will keep trying...", err)
+		go ic.Reconnect()
+	} else {
+		ic.streamMu.Lock()
+		ic.stream = stream
+		ic.streamMu.Unlock()
+
+		// Start the receiver loop as a seperate go routine.
+		go ic.receiverLoop(stream)
 	}
-
-	ic.streamMu.Lock()
-	ic.stream = stream
-	ic.streamMu.Unlock()
-
-	// Start the receiver loop as a seperate go routine.
-	go ic.receiverLoop(stream)
 
 	// Start the writer loop
 	go ic.writerLoop()

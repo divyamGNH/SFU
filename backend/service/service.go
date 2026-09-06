@@ -84,10 +84,12 @@ func (s *Service) OnJoinRoom(msg *control.JoinRoomRequest) {
 	roomId := msg.RoomId
 	clientId := msg.ClientId
 
+	logger.Infof("[Service] OnJoinRoom received for room: %s, client: %s", roomId, clientId)
+
 	// Call the respective functions.
 	err := s.roomHandler.JoinRoom(roomId, clientId)
 	if err != nil {
-		logger.Errorf("Error joining room : %v for client : %v", roomId, clientId)
+		logger.Errorf("Error joining room : %v for client with error : %v: %v", roomId, clientId, err)
 
 		// Send a false ack to notify Iris.
 		s.SendJoinRoomAck(roomId, clientId, false, err.Error())
@@ -101,6 +103,8 @@ func (s *Service) OnJoinRoom(msg *control.JoinRoomRequest) {
 func (s *Service) OnLeaveRoom(msg *control.LeaveRoomRequest) {
 	roomId := msg.RoomId
 	clientId := msg.ClientId
+
+	logger.Infof("[Service] OnLeaveRoom received for room: %s, client: %s", roomId, clientId)
 
 	// Call the respective functions.
 	err := s.roomHandler.LeaveRoom(roomId, clientId)
@@ -141,6 +145,8 @@ func (s *Service) OnPublisherOffer(msg *control.PublisherOffer) {
 	requestId := msg.RequestId
 	sdpString := msg.Sdp.Sdp
 
+	logger.Infof("Received OnPublisherOffer for client: %s, room: %s", clientId, roomId)
+
 	// The answer message we send now acts as the answer as well the ack for the offer itself if the offer failed we send a false in the success bool acting as the ack.
 	answer, err := s.roomHandler.HandleOffer(clientId, sdpString)
 	if err != nil {
@@ -151,6 +157,7 @@ func (s *Service) OnPublisherOffer(msg *control.PublisherOffer) {
 		return
 	}
 
+	logger.Infof("Successfully handled publisher offer for client: %s. Sending answer back.", clientId)
 	// Send the answer with a successful ack to Iris.
 	s.SendPublisherAnswer(requestId, roomId, clientId, true, "", answer)
 }
@@ -159,6 +166,8 @@ func (s *Service) OnSubscriberAnswer(msg *control.SubscriberAnswer) {
 	roomId := msg.RoomId
 	clientId := msg.ClientId
 	sdpString := msg.Sdp.Sdp
+
+	logger.Infof("Received OnSubscriberAnswer for client: %s, room: %s", clientId, roomId)
 
 	err := s.roomHandler.HandleAnswer(clientId, sdpString)
 	if err != nil {
@@ -173,6 +182,7 @@ func (s *Service) OnSubscriberAnswer(msg *control.SubscriberAnswer) {
 // SENDING FUNCTIONS
 
 func (s *Service) SendSubscriberOffer(roomId string, clientId string, offer webrtc.SessionDescription) {
+	logger.Infof("[Service] Sending SubscriberOffer to Iris (room=%s client=%s)", roomId, clientId)
 	msg := &control.Message{
 		Payload: &control.Message_SubscriberOffer{
 			SubscriberOffer: &control.SubscriberOffer{
@@ -190,6 +200,7 @@ func (s *Service) SendSubscriberOffer(roomId string, clientId string, offer webr
 }
 
 func (s *Service) SendPublisherAnswer(requestId, roomId, clientId string, success bool, errorMsg string, answer webrtc.SessionDescription) {
+	logger.Infof("Sending PublisherAnswer to Iris (success=%v) for client: %s", success, clientId)
 	responseMsg := &control.Message{
 		Payload: &control.Message_PublisherAnswer{
 			PublisherAnswer: &control.PublisherAnswer{
@@ -225,6 +236,7 @@ func (s *Service) SendSubscriberAnswerAck(roomId, clientId string, success bool,
 }
 
 func (s *Service) SendPublisherICECandidate(roomId string, clientId string, candidate webrtc.ICECandidateInit) {
+	logger.Infof("[Service] SendPublisherICECandidate to Iris for client: %s", clientId)
 	msg := &control.Message{
 		Payload: &control.Message_SfuPublisherIce{
 			SfuPublisherIce: &control.ICECandidatePayload{
@@ -239,6 +251,7 @@ func (s *Service) SendPublisherICECandidate(roomId string, clientId string, cand
 }
 
 func (s *Service) SendSubscriberICECandidate(roomId string, clientId string, candidate webrtc.ICECandidateInit) {
+	logger.Infof("[Service] SendSubscriberICECandidate to Iris for client: %s", clientId)
 	msg := &control.Message{
 		Payload: &control.Message_SfuSubscriberIce{
 			SfuSubscriberIce: &control.ICECandidatePayload{
@@ -253,6 +266,7 @@ func (s *Service) SendSubscriberICECandidate(roomId string, clientId string, can
 }
 
 func (s *Service) SendLeaveRoomAck(roomId string, userId string, flag bool, errorMessage string) {
+	logger.Infof("[Service] SendLeaveRoomAck to Iris (room: %s, client: %s, success: %v)", roomId, userId, flag)
 	msg := &control.Message{
 		Payload: &control.Message_LeaveRoomAck{
 			LeaveRoomAck: &control.LeaveRoomAck{
@@ -271,6 +285,7 @@ func (s *Service) SendLeaveRoomAck(roomId string, userId string, flag bool, erro
 }
 
 func (s *Service) SendJoinRoomAck(roomId string, userId string, flag bool, errorMessage string) {
+	logger.Infof("[Service] SendJoinRoomAck to Iris (room: %s, client: %s, success: %v)", roomId, userId, flag)
 	msg := &control.Message{
 		Payload: &control.Message_JoinRoomAck{
 			JoinRoomAck: &control.JoinRoomAck{
@@ -294,6 +309,7 @@ func (s *Service) OnMediaPublished(clientId string, mid string, publisherId stri
 		logger.Errorf("Could not find room for client with clientId : %v", clientId)
 		return
 	}
+	logger.Infof("[Service] Sending MediaPublished to Iris (room=%s subscriber=%s publisher=%s mid=%s)", roomId, clientId, publisherId, mid)
 
 	msg := &control.Message{
 		Payload: &control.Message_MediaPublished{
@@ -309,5 +325,7 @@ func (s *Service) OnMediaPublished(clientId string, mid string, publisherId stri
 	err := s.msgSender.SendMessageToIris(msg)
 	if err != nil {
 		logger.Error("Failed to send mediaPublished event : ", err)
+	} else {
+		logger.Infof("[Service] MediaPublished queued for Iris (subscriber=%s mid=%s)", clientId, mid)
 	}
 }
