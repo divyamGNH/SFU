@@ -1,6 +1,7 @@
 package room
 
 import (
+	"backend/config"
 	"backend/logger"
 	"backend/participant"
 	"backend/sfu"
@@ -81,7 +82,7 @@ func (rh *RoomHandler) JoinRoom(roomId string, clientId string) error {
 	// Some callbacks we passing come from room callbacks that come from the service file in the grpc package.
 	callbacks := participant.ClientCallbacks{
 		GetIceServers: func() []webrtc.ICEServer {
-			return []webrtc.ICEServer{} // TODO: Fetch from config later
+			return config.FetchICEServers()
 		},
 
 		PubCallbacks: participant.PublisherCallbacks{
