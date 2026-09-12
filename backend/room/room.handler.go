@@ -236,7 +236,7 @@ func (rh *RoomHandler) publishTrackToSubscriber(subscriber *participant.Client, 
 	// Trigger the callback to service.go to notify the Iris about the status so that it can actually publish media-published event with mid mapping.
 	if rh.callbacks.OnMediaPublished != nil {
 		logger.Infof("[RoomHandler] Emitting media-published mapping (subscriber=%s publisher=%s mid=%s)", subscriber.UserId, track.PublisherID, slot.Transceiver.Mid())
-		rh.callbacks.OnMediaPublished(subscriber.UserId, slot.Transceiver.Mid(), track.PublisherID)
+		rh.callbacks.OnMediaPublished(subscriber.UserId, slot.Transceiver.Mid(), track.PublisherID+"::"+track.StreamID)
 	}
 
 	return false, false, nil
