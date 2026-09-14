@@ -42,6 +42,7 @@ func NewIrisClient(serverAddress string, service *service.Service) (*IrisClient,
 		grpcClient: client,
 		service:    service,
 		send:       make(chan *control.Message, 100),
+		done:       make(chan any),
 	}, nil
 }
 

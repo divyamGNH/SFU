@@ -43,6 +43,9 @@ func main() {
 	// It creates it own goroutines so we dont need to initialize this as a seperate goroutine.
 	grpcClient.Start()
 
-	// Block the main goroutine from exiting so the background gRPC routines keep running
+	// Add this right here!
+	sfuService.SendIntialPing()
+
+	// Block the main goroutine from exiting so the background gRPC routines keep running.
 	select {}
 }

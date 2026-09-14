@@ -3,8 +3,11 @@ package service
 import (
 	"backend/logger"
 	"backend/room"
+	"log"
 	control "proto-contracts"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/pion/webrtc/v3"
 )
 
@@ -14,6 +17,7 @@ type MessageSender interface {
 }
 
 type Service struct {
+	sfuId       string
 	msgSender   MessageSender
 	roomHandler *room.RoomHandler
 }
@@ -21,6 +25,7 @@ type Service struct {
 // Create a new service without the message sender.
 func NewService(roomHandler *room.RoomHandler) *Service {
 	return &Service{
+		sfuId:       uuid.NewString(),
 		roomHandler: roomHandler,
 	}
 }
@@ -36,7 +41,9 @@ func (s *Service) SetUpRoomHandlerCallbacks() {
 	s.roomHandler.SetCallbacks(*callbacks)
 }
 
+// --------------------------------------------------------------------
 // HELPER FUNCTIONS
+// --------------------------------------------------------------------
 
 // Turn control.ICECandidate to webrtc.ICECandidateInit.
 func MapProtoCandidateToWebRTC(protoCandidate *control.ICECandidate) webrtc.ICECandidateInit {
@@ -78,7 +85,32 @@ func (s *Service) SetMessageSender(msgSender MessageSender) {
 	s.msgSender = msgSender
 }
 
+// Send a health ping with all the neccesary details to the Iris to maintain it's media-node registry.
+func (s *Service) HealthPing() {
+	cpuUsage := float32(12.5)
+	activeRooms := int32(0)
+	statusLabel := "FREE"
+
+	msg := &control.Message{
+		Payload: &control.Message_HealthPing{
+			HealthPing: &control.HealthPing{
+				SfuId:       s.sfuId,
+				CpuUsage:    cpuUsage,
+				ActiveRooms: activeRooms,
+				StatusLabel: statusLabel,
+			},
+		},
+	}
+
+	err := s.msgSender.SendMessageToIris(msg)
+	if err != nil {
+		log.Println("Error sending health ping to Iris :", err)
+	}
+}
+
+// --------------------------------------------------------------------
 // RECEIVING FUNCTIONS
+// --------------------------------------------------------------------
 
 func (s *Service) OnJoinRoom(msg *control.JoinRoomRequest) {
 	roomId := msg.RoomId
@@ -179,7 +211,9 @@ func (s *Service) OnSubscriberAnswer(msg *control.SubscriberAnswer) {
 	s.SendSubscriberAnswerAck(roomId, clientId, true, "")
 }
 
+// --------------------------------------------------------------------
 // SENDING FUNCTIONS
+// --------------------------------------------------------------------
 
 func (s *Service) SendSubscriberOffer(roomId string, clientId string, offer webrtc.SessionDescription) {
 	logger.Infof("[Service] Sending SubscriberOffer to Iris (room=%s client=%s)", roomId, clientId)
@@ -327,5 +361,24 @@ func (s *Service) OnMediaPublished(clientId string, mid string, publisherId stri
 		logger.Error("Failed to send mediaPublished event : ", err)
 	} else {
 		logger.Infof("[Service] MediaPublished queued for Iris (subscriber=%s mid=%s)", clientId, mid)
+	}
+}
+
+// Send the intial starting ping and start the CRON job.
+func (s *Service) SendIntialPing() {
+	s.HealthPing()
+
+	go s.SendContinousPing()
+}
+
+// --------------------------------------------------------------------
+// CRON JOB
+// --------------------------------------------------------------------
+
+// Send a health ping every 5 second.
+func (s *Service) SendContinousPing() {
+	ticker := time.NewTicker(5 * time.Second)
+	for range ticker.C {
+		s.HealthPing()
 	}
 }
