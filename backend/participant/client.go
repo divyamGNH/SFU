@@ -3,8 +3,6 @@ package participant
 import (
 	"backend/logger"
 	"sync"
-
-	"github.com/gorilla/websocket"
 )
 
 // Use this client struct as later on we dont just need pc we would need userId, roomId etc a lot of things that is why use this struct.
@@ -14,7 +12,6 @@ import (
 type Client struct {
 	UserId         string            `json:"userId"`
 	RoomId         string            `json:"roomId"`
-	Conn           *websocket.Conn   `json:"conn"`
 	Publisher      *Publisher        `json:"publisher"`
 	Subscriber     *Subscriber       `json:"subscriber"`
 	MidToPublisher map[string]string `json:"midToPublisher"`
@@ -22,8 +19,34 @@ type Client struct {
 	VideoBool      bool              `json:"videoBool"`
 	ClientClosed   bool
 
-	Mu   sync.RWMutex
-	Send chan any
+	Mu sync.RWMutex
+}
+
+func NewClient(roomId string, userId string, callbacks ClientCallbacks) (*Client, error) {
+	client := &Client{
+		RoomId:         roomId,
+		UserId:         userId,
+		MidToPublisher: make(map[string]string),
+		AudioBool:      false,
+		VideoBool:      false,
+	}
+
+	// Create a publisher.
+	pub, err := NewPublisher(callbacks.GetIceServers(), callbacks.PubCallbacks, client)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create a subscriber.
+	sub, err := NewSubscriber(callbacks.GetIceServers(), callbacks.SubCallbacks, client)
+	if err != nil {
+		return nil, err
+	}
+
+	client.Publisher = pub
+	client.Subscriber = sub
+
+	return client, nil
 }
 
 // This clean up only happens when the client leaves not on reconnections as this destroys the PC and connections everything client had with the server.
@@ -51,57 +74,5 @@ func (c *Client) CleanUpClient() {
 
 	c.MidToPublisher = nil
 
-	if c.Conn != nil {
-		err := c.Conn.Close()
-		if err != nil {
-			logger.Errorf("Error closing the client connection for client with userId: %v with roomId: %v", c.UserId, c.RoomId)
-		}
-		c.Conn = nil
-	}
-
 	// We don't close the channel as it may cause panic issues with any parallel go routine working on it we just flip the ClientClosed bool to prevent any more functions.
-}
-
-// Write pump is a function owned by the Client struct only
-func (c *Client) WritePump() {
-
-	c.Mu.RLock()
-	if c.ClientClosed || c.Conn == nil {
-		c.Mu.RUnlock()
-		return
-	}
-	c.Mu.RUnlock()
-
-	for msg := range c.Send {
-		err := c.Conn.WriteJSON(msg)
-		if err != nil {
-			logger.Error("[WritePump] Error in emitting the event: ", err)
-			return
-		}
-	}
-}
-
-// TODO : Implement PING/PONG Hearbeat solution for zombie clients.
-func (c *Client) SafeSend(msg any) bool {
-
-	c.Mu.RLock()
-
-	if c.ClientClosed {
-		c.Mu.RUnlock()
-		return false
-	}
-
-	send := c.Send
-
-	c.Mu.RUnlock()
-
-	select {
-	case send <- msg:
-		return true
-
-	default:
-		logger.Infof("[Client %s] send channel full", c.UserId)
-		//TODO : prod approach is to simple close the client and disconnect it as it simply can not keep up.
-		return false
-	}
 }

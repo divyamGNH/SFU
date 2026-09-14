@@ -1,12 +1,15 @@
+// THIS PACKAGE HAS BEEN DEGRADED AND SHOULD NO LONGER BE USED.
+// IT IS KEPT JUST FOR THE SAKE OF BUILDING THE BROKEN BLOCKS CORRECTLY THEN THIS WILL BE REMOVED
+
 package websocket
 
 import (
 	"backend/config"
+	"backend/logger"
 	"backend/participant"
 	"backend/room"
 	"backend/types"
 	"encoding/json"
-	"backend/logger"
 	"net/http"
 
 	"github.com/gorilla/websocket"
@@ -114,7 +117,7 @@ func (wh *WsHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 			}
 
 			logger.Info("[WS] Received 'offer' from client:", client.UserId)
-			answer, err := client.Publisher.HandleOffer(signal)
+			answer, err := client.Publisher.HandleOffer(signal.SDP.SDP)
 			if err != nil {
 				logger.Error("[WS] Error handling offer:", err)
 				continue
