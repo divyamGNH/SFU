@@ -99,7 +99,7 @@ func (s *Service) HealthPing() {
 	} else if err != nil {
 		log.Println("Error reading CPU usage:", err)
 	}
-	activeRooms := int32(0)
+	activeRooms := s.roomHandler.GetActiveRoomsCount()
 	statusLabel := "FREE"
 
 	msg := &control.Message{
@@ -113,7 +113,7 @@ func (s *Service) HealthPing() {
 		},
 	}
 
-	err := s.msgSender.SendMessageToIris(msg)
+	err = s.msgSender.SendMessageToIris(msg)
 	if err != nil {
 		log.Println("Error sending health ping to Iris :", err)
 	}

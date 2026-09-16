@@ -48,6 +48,12 @@ func (rh *RoomHandler) SetCallbacks(callbacks RoomCallbacks) {
 	rh.callbacks = callbacks
 }
 
+func (rh *RoomHandler) GetActiveRoomsCount() int32 {
+	rh.Mu.RLock()
+	defer rh.Mu.RUnlock()
+	return int32(len(rh.RoomIdToRoom))
+}
+
 // Iris calls this function when a client requests create-room then iris gets the room and calls joinroom on it that is why we dont actually put any data realted to user in the create-room function.
 // Iris sends the roomId so we dont need to create roomId anymore.
 func (rh *RoomHandler) CreateRoom(roomId string) *Room {
