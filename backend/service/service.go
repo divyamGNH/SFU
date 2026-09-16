@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/pion/webrtc/v3"
+	"github.com/shirou/gopsutil/v3/cpu"
 )
 
 // Implemented by the signalling package.
@@ -24,8 +25,10 @@ type Service struct {
 
 // Create a new service without the message sender.
 func NewService(roomHandler *room.RoomHandler) *Service {
+	id := uuid.NewString()
+	logger.Infof("SFU node started with ID: %s", id)
 	return &Service{
-		sfuId:       uuid.NewString(),
+		sfuId:       id,
 		roomHandler: roomHandler,
 	}
 }
@@ -87,7 +90,15 @@ func (s *Service) SetMessageSender(msgSender MessageSender) {
 
 // Send a health ping with all the neccesary details to the Iris to maintain it's media-node registry.
 func (s *Service) HealthPing() {
-	cpuUsage := float32(12.5)
+	var cpuUsage float32 = 0.0
+
+	// Get the real CPU usage since the last call
+	percentages, err := cpu.Percent(0, false)
+	if err == nil && len(percentages) > 0 {
+		cpuUsage = float32(percentages[0])
+	} else if err != nil {
+		log.Println("Error reading CPU usage:", err)
+	}
 	activeRooms := int32(0)
 	statusLabel := "FREE"
 
