@@ -1,6 +1,7 @@
 package signalling
 
 import (
+	"backend/config"
 	"backend/service"
 	"context"
 	"fmt"
@@ -10,7 +11,6 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 var MAX_RETRY_LIMIT = 10
@@ -27,9 +27,15 @@ type IrisClient struct {
 }
 
 func NewIrisClient(serverAddress string, service *service.Service) (*IrisClient, error) {
+
+	tlsCreds, err := config.LoadClientTLSCredentials()
+	if err != nil {
+		log.Fatalf("Fatal error : Could not load mTLS certificates : %v", err)
+	}
+
 	// Create a gRPC connection to Iris here.
-	// TODOINPROD : Here we used insecure creds for local development but we need to use TLS when we go in prod.
-	conn, err := grpc.NewClient(serverAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// Use mTLS while connecting with Iris.
+	conn, err := grpc.NewClient(serverAddress, grpc.WithTransportCredentials(tlsCreds))
 	if err != nil {
 		return nil, err
 	}
