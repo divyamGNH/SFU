@@ -1,6 +1,7 @@
 package main
 
 import (
+	"backend/config"
 	"backend/logger"
 	"backend/service"
 
@@ -26,6 +27,9 @@ func main() {
 
 	// Create a new sfuService.
 	sfuService := service.NewService(roomHandler)
+
+	// Start the TURN routine.
+	config.InitTURNRefresh()
 
 	// Create the gRPC Client that can talk to Iris.
 	grpcClient, err := signalling.NewIrisClient("localhost:50051", sfuService)
