@@ -7,7 +7,7 @@ import (
 	"github.com/pion/webrtc/v3"
 )
 
-// the actual WriteRTCP function needs a PC so basically a call looks like publisher.PC.WriteRTCP but to prevent coupling we inject that function in the sfu.
+// The actual WriteRTCP function needs a PC so basically a call looks like publisher.PC.WriteRTCP but to prevent coupling we inject that function in the sfu.
 type RTCPWriter interface {
 	WriteRTCP(packets []rtcp.Packet) error
 }
