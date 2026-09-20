@@ -4,12 +4,23 @@ import (
 	"backend/config"
 	"backend/logger"
 	"backend/service"
+	"os"
 
 	"backend/room"
 	"backend/signalling"
+
+	"github.com/joho/godotenv"
 )
 
 func main() {
+	// Load environment variables from .env file, overriding any existing stuck terminal vars
+	if err := godotenv.Overload(); err != nil {
+		logger.Warn("No .env file found or failed to load")
+	}
+
+	// Temporary debug print
+	logger.Info("DEBUG KEY: " + os.Getenv("IRIS_API_KEY"))
+
 	// Initialize custom logger
 	logger.InitLogger(logger.Config{
 		GlobalLevel: logger.INFO,

@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -85,7 +86,8 @@ func FetchTURNCredentials() {
 	defer res.Body.Close()
 
 	if res.StatusCode != 200 {
-		log.Println("TURN server returned bad status : ", res.StatusCode)
+		bodyBytes, _ := io.ReadAll(res.Body)
+		log.Println("TURN server returned bad status : ", res.StatusCode, " Response: ", string(bodyBytes))
 		return
 	}
 
